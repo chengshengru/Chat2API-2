@@ -100,12 +100,30 @@ type ApiKey struct {
 	Description string `json:"description,omitempty"`
 }
 
-// ModelMapping 模型映射定义
+// ModelMapping 模型映射
 type ModelMapping struct {
 	RequestModel       string `json:"requestModel"`
 	ActualModel        string `json:"actualModel"`
 	PreferredProviderID string `json:"preferredProviderId,omitempty"`
 	PreferredAccountID  string `json:"preferredAccountId,omitempty"`
+}
+
+// ModelMappingEntry 用于 Wails 绑定的包装类型
+type ModelMappingEntry struct {
+	Key   string      `json:"key"`
+	Value ModelMapping `json:"value"`
+}
+
+// PersistentStatistics 持久化统计
+type PersistentStatistics struct {
+	TotalRequests   int64             `json:"totalRequests"`
+	SuccessRequests int64             `json:"successRequests"`
+	FailedRequests  int64             `json:"failedRequests"`
+	TotalLatency    int64             `json:"totalLatency"`
+	LastUpdated     int64             `json:"lastUpdated"`
+	ModelUsage      map[string]string `json:"modelUsage"`
+	ProviderUsage   map[string]string `json:"providerUsage"`
+	AccountUsage    map[string]string `json:"accountUsage"`
 }
 
 // SessionConfig 会话配置
@@ -147,7 +165,7 @@ type AppConfig struct {
 	ProxyPort           int                  `json:"proxyPort"`
 	ProxyHost           string               `json:"proxyHost"`
 	LoadBalanceStrategy LoadBalanceStrategy    `json:"loadBalanceStrategy"`
-	ModelMappings       map[string]ModelMapping `json:"modelMappings"`
+	ModelMappings       []ModelMappingEntry     `json:"modelMappings"`
 	Theme               Theme                `json:"theme"`
 	AutoStart           bool                 `json:"autoStart"`
 	AutoStartProxy      bool                 `json:"autoStartProxy"`
@@ -172,7 +190,7 @@ func DefaultAppConfig() AppConfig {
 		ProxyPort:           8080,
 		ProxyHost:           "127.0.0.1",
 		LoadBalanceStrategy: StrategyRoundRobin,
-		ModelMappings:       make(map[string]ModelMapping),
+		ModelMappings:       []ModelMappingEntry{},
 		Theme:               ThemeSystem,
 		AutoStart:           false,
 		AutoStartProxy:      false,
@@ -222,7 +240,7 @@ type SessionRecord struct {
 	ProviderSessionID string                 `json:"providerSessionId"`
 	ParentMessageID   string                 `json:"parentMessageId,omitempty"`
 	SessionType       string                 `json:"sessionType"` // "chat" | "agent"
-	Messages          []map[string]interface{} `json:"messages"`
+	Messages          []string            `json:"messages"`
 	Credentials       map[string]string      `json:"credentials,omitempty"`
 	CreatedAt         int64                  `json:"createdAt"`
 	LastActiveAt      int64                  `json:"lastActiveAt"`
@@ -277,10 +295,10 @@ type ProxyStatistics struct {
 	AvgLatency        int64            `json:"avgLatency"`
 	RequestsPerMinute int64            `json:"requestsPerMinute"`
 	ActiveConnections int64            `json:"activeConnections"`
-	ModelUsage        map[string]int64 `json:"modelUsage"`
-	ProviderUsage     map[string]int64 `json:"providerUsage"`
-	AccountUsage      map[string]int64 `json:"accountUsage"`
-	LastUpdated       int64            `json:"lastUpdated"`
+	ModelUsage        map[string]string `json:"modelUsage"`
+	ProviderUsage     map[string]string `json:"providerUsage"`
+	AccountUsage      map[string]string `json:"accountUsage"`
+	LastUpdated       int64             `json:"lastUpdated"`
 }
 
 // EffectiveModel 有效模型信息

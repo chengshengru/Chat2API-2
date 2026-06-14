@@ -41,10 +41,10 @@ func New() *Logger {
 		retentionDays: 7,
 		stats: PersistentStatistics{
 			LastUpdated:   time.Now().Unix(),
-			ModelUsage:    make(map[string]int),
-			ProviderUsage: make(map[string]int),
-			AccountUsage:  make(map[string]int),
-			DailyStats:   make(map[string]*DailyStats),
+			ModelUsage:    make(map[string]string),
+			ProviderUsage: make(map[string]string),
+			AccountUsage:  make(map[string]string),
+			DailyStats:   make(map[string]string),
 		},
 	}
 }
@@ -62,10 +62,10 @@ func NewWithDir(baseDir string) *Logger {
 		retentionDays: 7,
 		stats: PersistentStatistics{
 			LastUpdated:   time.Now().Unix(),
-			ModelUsage:    make(map[string]int),
-			ProviderUsage: make(map[string]int),
-			AccountUsage:  make(map[string]int),
-			DailyStats:    make(map[string]*DailyStats),
+			ModelUsage:    make(map[string]string),
+			ProviderUsage: make(map[string]string),
+			AccountUsage:  make(map[string]string),
+			DailyStats:    make(map[string]string),
 		},
 	}
 }
@@ -75,7 +75,7 @@ func NewWithDir(baseDir string) *Logger {
 func (l *Logger) log(level LogLevel, message string, fields ...Field) LogEntry {
 	l.mu.Lock()
 
-	data := make(map[string]interface{})
+	data := make(map[string]string)
 	for _, f := range fields {
 		data[f.Key] = f.Value
 	}
@@ -389,39 +389,32 @@ func (l *Logger) updateStatistics(entry RequestLogEntry) {
 	l.stats.TotalLatency += entry.Latency
 
 	if entry.Model != "" {
-		l.stats.ModelUsage[entry.Model]++
+		curr := l.stats.ModelUsage[entry.Model]
+		n, _ := parseInt64(curr)
+		n++
+		l.stats.ModelUsage[entry.Model] = fmt.Sprintf("%d", n)
 	}
 	if entry.ProviderID != "" {
-		l.stats.ProviderUsage[entry.ProviderID]++
+		curr := l.stats.ProviderUsage[entry.ProviderID]
+		n, _ := parseInt64(curr)
+		n++
+		l.stats.ProviderUsage[entry.ProviderID] = fmt.Sprintf("%d", n)
 	}
 	if entry.AccountID != "" {
-		l.stats.AccountUsage[entry.AccountID]++
+		curr := l.stats.AccountUsage[entry.AccountID]
+		n, _ := parseInt64(curr)
+		n++
+		l.stats.AccountUsage[entry.AccountID] = fmt.Sprintf("%d", n)
 	}
 
-	// 更新每日统计
+	// 更新每日统计（简化：存储 JSON 字符串）
 	date := time.Unix(entry.Timestamp, 0).Format("2006-01-02")
-	if _, exists := l.stats.DailyStats[date]; !exists {
-		l.stats.DailyStats[date] = &DailyStats{
-			Date:          date,
-			ModelUsage:    make(map[string]int),
-			ProviderUsage: make(map[string]int),
-		}
-	}
-
-	daily := l.stats.DailyStats[date]
-	daily.TotalRequests++
-	if entry.Status == "success" {
-		daily.SuccessRequests++
-	} else {
-		daily.FailedRequests++
-	}
-	daily.TotalLatency += entry.Latency
-	if entry.Model != "" {
-		daily.ModelUsage[entry.Model]++
-	}
-	if entry.ProviderID != "" {
-		daily.ProviderUsage[entry.ProviderID]++
-	}
+	jsonStr, _ := json.Marshal(map[string]int64{
+		"total":   l.stats.TotalRequests,
+		"success": l.stats.SuccessRequests,
+		"failed":  l.stats.FailedRequests,
+	})
+	l.stats.DailyStats[date] = string(jsonStr)
 
 	l.stats.LastUpdated = time.Now().Unix()
 
@@ -626,4 +619,18 @@ func (l *Logger) GetLogsPaginated(options LogOptions) *PaginatedResult {
 		Page:  options.Offset/options.Limit + 1,
 		Size:  len(items),
 	}
+}
+
+// ==================== 辅助函数 ====================
+
+func parseInt64(s string) (int64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	var n int64
+	_, err := fmt.Sscanf(s, "%d", &n)
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }

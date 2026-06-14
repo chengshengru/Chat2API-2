@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -528,16 +529,16 @@ func (sm *StoreManager) RecordRequest(success bool, latency int64, model, provid
 	defer sm.mu.Unlock()
 
 	if sm.stats.ModelUsage == nil {
-		sm.stats.ModelUsage = make(map[string]int)
+		sm.stats.ModelUsage = make(map[string]string)
 	}
 	if sm.stats.ProviderUsage == nil {
-		sm.stats.ProviderUsage = make(map[string]int)
+		sm.stats.ProviderUsage = make(map[string]string)
 	}
 	if sm.stats.AccountUsage == nil {
-		sm.stats.AccountUsage = make(map[string]int)
+		sm.stats.AccountUsage = make(map[string]string)
 	}
 	if sm.stats.DailyStats == nil {
-		sm.stats.DailyStats = make(map[string]*logger.DailyStats)
+		sm.stats.DailyStats = make(map[string]string)
 	}
 
 	sm.stats.TotalRequests++
@@ -549,37 +550,42 @@ func (sm *StoreManager) RecordRequest(success bool, latency int64, model, provid
 	sm.stats.TotalLatency += latency
 
 	if model != "" {
-		sm.stats.ModelUsage[model]++
+		curr, _ := strconv.ParseInt(sm.stats.ModelUsage[model], 10, 64)
+		sm.stats.ModelUsage[model] = strconv.FormatInt(curr+1, 10)
 	}
 	if providerId != "" {
-		sm.stats.ProviderUsage[providerId]++
+		curr, _ := strconv.ParseInt(sm.stats.ProviderUsage[providerId], 10, 64)
+		sm.stats.ProviderUsage[providerId] = strconv.FormatInt(curr+1, 10)
 	}
 	if accountId != "" {
-		sm.stats.AccountUsage[accountId]++
+		curr, _ := strconv.ParseInt(sm.stats.AccountUsage[accountId], 10, 64)
+		sm.stats.AccountUsage[accountId] = strconv.FormatInt(curr+1, 10)
 	}
 
 	// 每日统计
 	today := time.Now().Format("2006-01-02")
-	if sm.stats.DailyStats[today] == nil {
-		sm.stats.DailyStats[today] = &logger.DailyStats{
-			Date:          today,
-			ModelUsage:    make(map[string]int),
-			ProviderUsage: make(map[string]int),
-		}
+	if sm.stats.DailyStats[today] == "" {
+		data, _ := json.Marshal(map[string]int64{
+			"total":   0,
+			"success": 0,
+			"failed":  0,
+			"latency": 0,
+		})
+		sm.stats.DailyStats[today] = string(data)
 	}
-	sm.stats.DailyStats[today].TotalRequests++
+
+	// 解析并更新每日统计
+	dailyMap := map[string]int64{}
+	json.Unmarshal([]byte(sm.stats.DailyStats[today]), &dailyMap)
+	dailyMap["total"]++
 	if success {
-		sm.stats.DailyStats[today].SuccessRequests++
+		dailyMap["success"]++
 	} else {
-		sm.stats.DailyStats[today].FailedRequests++
+		dailyMap["failed"]++
 	}
-	sm.stats.DailyStats[today].TotalLatency += latency
-	if model != "" {
-		sm.stats.DailyStats[today].ModelUsage[model]++
-	}
-	if providerId != "" {
-		sm.stats.DailyStats[today].ProviderUsage[providerId]++
-	}
+	dailyMap["latency"] += latency
+	newData, _ := json.Marshal(dailyMap)
+	sm.stats.DailyStats[today] = string(newData)
 
 	sm.stats.LastUpdated = time.Now().Unix()
 
@@ -706,10 +712,10 @@ func (sm *StoreManager) loadStatistics() {
 	if err != nil {
 		sm.stats = logger.PersistentStatistics{
 			LastUpdated:   time.Now().Unix(),
-			ModelUsage:    make(map[string]int),
-			ProviderUsage: make(map[string]int),
-			AccountUsage:  make(map[string]int),
-			DailyStats:    make(map[string]*logger.DailyStats),
+			ModelUsage:    make(map[string]string),
+			ProviderUsage: make(map[string]string),
+			AccountUsage:  make(map[string]string),
+			DailyStats:    make(map[string]string),
 		}
 		return
 	}
@@ -718,25 +724,25 @@ func (sm *StoreManager) loadStatistics() {
 		sm.logger.Error("Failed to parse statistics", logger.Field{Key: "error", Value: err.Error()})
 		sm.stats = logger.PersistentStatistics{
 			LastUpdated:   time.Now().Unix(),
-			ModelUsage:    make(map[string]int),
-			ProviderUsage: make(map[string]int),
-			AccountUsage:  make(map[string]int),
-			DailyStats:    make(map[string]*logger.DailyStats),
+			ModelUsage:    make(map[string]string),
+			ProviderUsage: make(map[string]string),
+			AccountUsage:  make(map[string]string),
+			DailyStats:    make(map[string]string),
 		}
 	}
 
 	// 确保所有 map 不为 nil
 	if sm.stats.ModelUsage == nil {
-		sm.stats.ModelUsage = make(map[string]int)
+		sm.stats.ModelUsage = make(map[string]string)
 	}
 	if sm.stats.ProviderUsage == nil {
-		sm.stats.ProviderUsage = make(map[string]int)
+		sm.stats.ProviderUsage = make(map[string]string)
 	}
 	if sm.stats.AccountUsage == nil {
-		sm.stats.AccountUsage = make(map[string]int)
+		sm.stats.AccountUsage = make(map[string]string)
 	}
 	if sm.stats.DailyStats == nil {
-		sm.stats.DailyStats = make(map[string]*logger.DailyStats)
+		sm.stats.DailyStats = make(map[string]string)
 	}
 }
 

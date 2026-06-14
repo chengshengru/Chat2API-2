@@ -1,6 +1,7 @@
 package window
 
 import (
+	"fmt"
 	"sync"
 
 	"chat2api-wails/internal/logger"
@@ -78,7 +79,7 @@ func (m *Manager) Toggle() bool {
 	defer m.mu.Unlock()
 
 	m.isOpen = !m.isOpen
-	m.logger.Info("Window toggled", logger.Field{Key: "isOpen", Value: m.isOpen})
+	m.logger.Info("Window toggled", logger.Field{Key: "isOpen", Value: fmt.Sprintf("%t", m.isOpen)})
 	return true
 }
 

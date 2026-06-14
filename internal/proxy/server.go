@@ -104,7 +104,7 @@ func (ps *ProxyServer) Start(port int, host string) bool {
 
 	ps.logger.Info("Proxy server started",
 		logger.Field{Key: "host", Value: host},
-		logger.Field{Key: "port", Value: port},
+		logger.Field{Key: "port", Value: fmt.Sprintf("%d", port)},
 	)
 
 	return true
@@ -247,7 +247,7 @@ func (ps *ProxyServer) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 
 	ps.logger.Info("Chat request",
 		logger.Field{Key: "model", Value: req.Model},
-		logger.Field{Key: "stream", Value: req.Stream},
+		logger.Field{Key: "stream", Value: fmt.Sprintf("%t", req.Stream)},
 	)
 
 	// 选择提供商和账户

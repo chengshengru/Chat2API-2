@@ -12,20 +12,20 @@ const (
 
 // Field 用于结构化日志字段
 type Field struct {
-	Key   string      `json:"key"`
-	Value interface{} `json:"value,omitempty"`
+	Key   string `json:"key"`
+	Value string `json:"value,omitempty"`
 }
 
 // LogEntry 是单条日志记录
 type LogEntry struct {
-	ID         string                 `json:"id"`
-	Timestamp  int64                  `json:"timestamp"`
-	Level      LogLevel               `json:"level"`
-	Message    string                 `json:"message"`
-	AccountID  string                 `json:"accountId,omitempty"`
-	ProviderID string                 `json:"providerId,omitempty"`
-	RequestID  string                 `json:"requestId,omitempty"`
-	Data       map[string]interface{} `json:"data,omitempty"`
+	ID         string            `json:"id"`
+	Timestamp  int64             `json:"timestamp"`
+	Level      LogLevel          `json:"level"`
+	Message    string            `json:"message"`
+	AccountID  string            `json:"accountId,omitempty"`
+	ProviderID string            `json:"providerId,omitempty"`
+	RequestID  string            `json:"requestId,omitempty"`
+	Data       map[string]string `json:"data,omitempty"`
 }
 
 // LogStats 日志统计信息
@@ -81,15 +81,15 @@ type RequestLogEntry struct {
 
 // PersistentStatistics 持久化的统计数据
 type PersistentStatistics struct {
-	TotalRequests    int64                `json:"totalRequests"`
-	SuccessRequests  int64                `json:"successRequests"`
-	FailedRequests   int64                `json:"failedRequests"`
-	TotalLatency     int64                `json:"totalLatency"`
-	LastUpdated      int64                `json:"lastUpdated"`
-	ModelUsage       map[string]int       `json:"modelUsage"`
-	ProviderUsage    map[string]int       `json:"providerUsage"`
-	AccountUsage     map[string]int       `json:"accountUsage"`
-	DailyStats       map[string]*DailyStats `json:"dailyStats"`
+	TotalRequests    int64             `json:"totalRequests"`
+	SuccessRequests  int64             `json:"successRequests"`
+	FailedRequests   int64             `json:"failedRequests"`
+	TotalLatency     int64             `json:"totalLatency"`
+	LastUpdated      int64             `json:"lastUpdated"`
+	ModelUsage       map[string]string `json:"modelUsage"`
+	ProviderUsage    map[string]string `json:"providerUsage"`
+	AccountUsage     map[string]string `json:"accountUsage"`
+	DailyStats       map[string]string `json:"dailyStats"`
 }
 
 // DailyStats 每日统计数据
@@ -99,6 +99,6 @@ type DailyStats struct {
 	SuccessRequests int64          `json:"successRequests"`
 	FailedRequests  int64          `json:"failedRequests"`
 	TotalLatency    int64          `json:"totalLatency"`
-	ModelUsage      map[string]int `json:"modelUsage"`
-	ProviderUsage   map[string]int `json:"providerUsage"`
+	ModelUsage      map[string]string `json:"modelUsage"`
+	ProviderUsage   map[string]string `json:"providerUsage"`
 }
