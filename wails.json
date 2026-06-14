@@ -1,0 +1,20 @@
+{
+  "name": "Chat2API",
+  "outputfilename": "Chat2API",
+  "frontend:install": "cd frontend && npm install",
+  "frontend:build": "cd frontend && npm run build",
+  "frontend:dev:watcher": "cd frontend && npm run dev",
+  "frontend:dev:serverPort": "5173",
+  "frontend:dev:proxyURL": "http://localhost:5173",
+  "author": {
+    "name": "Chat2API Team",
+    "email": "support@chat2api.com"
+  },
+  "info": {
+    "companyName": "Chat2API",
+    "productName": "Chat2API",
+    "productVersion": "1.4.0",
+    "copyright": "Copyright © 2026 Chat2API Team",
+    "comments": "Multi-platform AI Service Unified Management Tool"
+  }
+}
