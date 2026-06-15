@@ -2,494 +2,400 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"embed"
 	"fmt"
-	"sync"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"log"
+	"os"
+	"path/filepath"
+	"runtime"
+	"time"
 
 	"chat2api-wails/internal/logger"
-	"chat2api-wails/internal/oauth"
 	"chat2api-wails/internal/proxy"
-	"chat2api-wails/internal/session"
 	"chat2api-wails/internal/store"
-	"chat2api-wails/internal/tray"
 	"chat2api-wails/internal/types"
-	"chat2api-wails/internal/window"
+
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
-// App 应用程序核心
+// App 应用主结构
 type App struct {
-	mu             sync.RWMutex
-	ctx            context.Context
-	logger         *logger.Logger
-	storeManager   *store.StoreManager
-	proxyServer    *proxy.ProxyServer
-	oauthManager   *oauth.Manager
-	sessionManager *session.Manager
-	trayManager    *tray.Manager
-	windowManager  *window.Manager
+	ctx              context.Context
+	logger           *logger.Logger
+	store            *store.StoreManager
+	proxyServer      *proxy.ProxyServer
 }
 
-// NewApp 创建新的应用
+// NewApp 创建应用实例
 func NewApp() *App {
-	appLogger := logger.New()
-
-	return &App{
-		logger: appLogger,
-	}
+	return &App{}
 }
 
-// startup 启动时调用
+// startup 应用启动回调
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	a.logger = logger.New()
 
-	// 初始化管理器
-	a.storeManager = store.NewManager(a.logger)
-	a.proxyServer = proxy.NewServer(a.storeManager, a.logger)
-	a.oauthManager = oauth.NewManager(a.logger)
-	a.sessionManager = session.NewManager(a.storeManager, a.logger)
-	a.trayManager = tray.NewManager(a.logger)
-	a.windowManager = window.NewManager(a.logger)
-
-	// 自动启动代理服务器
-	config := a.storeManager.GetConfig()
-	if config.AutoStartProxy {
-		a.proxyServer.Start(config.ProxyPort, config.ProxyHost)
+	// 获取数据目录
+	userDataDir, err := getUserDataDir()
+	if err != nil {
+		log.Printf("Failed to get user data dir: %v", err)
+		userDataDir = "./data"
 	}
 
-	a.logger.Info("Application started")
+	// 确保目录存在
+	os.MkdirAll(userDataDir, 0755)
+
+	// 初始化日志系统
+	logDir := filepath.Join(userDataDir, "logs")
+	os.MkdirAll(logDir, 0755)
+	a.logger = logger.NewWithDir(logDir)
+
+	a.logger.Info("Application starting",
+		logger.Field{Key: "version", Value: "1.4.0"},
+		logger.Field{Key: "platform", Value: runtime.GOOS},
+		logger.Field{Key: "arch", Value: runtime.GOARCH},
+	)
+
+	// 初始化存储管理器
+	dataDir := filepath.Join(userDataDir, "store")
+	os.MkdirAll(dataDir, 0755)
+	a.store, err = store.NewStoreManager(dataDir, a.logger)
+	if err != nil {
+		a.logger.Error("Failed to initialize store manager", logger.Field{Key: "error", Value: err.Error()})
+		log.Printf("Failed to initialize store: %v", err)
+		return
+	}
+
+	// 初始化代理服务器
+	a.proxyServer = proxy.NewServer(a.store, a.logger)
+
+	// 启动代理服务器
+	config := a.store.GetConfig()
+	if config.ProxyConfig.Enabled {
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			a.proxyServer.Start(config.ProxyConfig.Port, config.ProxyConfig.Host)
+		}()
+	}
+
+	a.logger.Info("Application started successfully")
 }
 
-// domReady DOM 准备好时调用
+// domReady DOM准备就绪
 func (a *App) domReady(ctx context.Context) {
 	a.logger.Info("DOM ready")
 }
 
-// beforeClose 关闭前调用
-func (a *App) beforeClose(ctx context.Context) (prevent bool) {
+// beforeClose 窗口关闭前
+func (a *App) beforeClose(ctx context.Context) bool {
 	a.logger.Info("Application closing")
-
-	// 停止代理服务器
-	a.proxyServer.Stop()
-
+	if a.proxyServer != nil {
+		a.proxyServer.Stop()
+	}
 	return false
 }
 
-// shutdown 关机时调用
+// shutdown 应用关闭
 func (a *App) shutdown(ctx context.Context) {
-	a.logger.Info("Application shutdown complete")
+	a.logger.Info("Application shutdown")
 }
 
-// ==================== 日志相关 API ====================
+// ==================== Wails 绑定方法 ====================
 
-// GetLogs 获取日志
-func (a *App) GetLogs(options logger.LogOptions) *logger.PaginatedResult {
-	return a.logger.GetLogsPaginated(options)
-}
-
-// GetLogsByLevel 根据级别获取日志
-func (a *App) GetLogsByLevel(level string, limit int) []logger.LogEntry {
-	return a.logger.GetLogsByLevel(level, limit)
-}
-
-// GetErrorLogs 获取错误日志
-func (a *App) GetErrorLogs(limit int) []logger.LogEntry {
-	return a.logger.GetErrorLogs(limit)
-}
-
-// GetRecentLogs 获取最近日志
-func (a *App) GetRecentLogs(limit int) []logger.LogEntry {
-	return a.logger.GetRecentLogs(limit)
-}
-
-// ClearLogs 清除日志
-func (a *App) ClearLogs() bool {
-	return a.logger.ClearLogs()
-}
-
-// ExportLogs 导出日志
-func (a *App) ExportLogs(filename string) string {
-	return a.logger.ExportLogs("txt")
-}
-
-// GetStatistics 获取统计
-func (a *App) GetStatistics() logger.PersistentStatistics {
-	return a.storeManager.GetStatistics()
-}
-
-// ==================== 提供商 API ====================
-
-// GetProviders 获取所有提供商
-func (a *App) GetProviders() []types.Provider {
-	return a.storeManager.GetProviders()
-}
-
-// GetProviderById 根据 ID 获取提供商
-func (a *App) GetProviderById(id string) *types.Provider {
-	return a.storeManager.GetProviderById(id)
-}
-
-// AddProvider 添加提供商
-func (a *App) AddProvider(provider *types.Provider) (string, error) {
-	if provider.ID == "" {
-		provider.ID = store.GenerateId()
+// GetConfig 获取配置
+func (a *App) GetConfig() types.AppConfig {
+	if a.store == nil {
+		return types.AppConfig{}
 	}
-	err := a.storeManager.AddProvider(provider)
-	if err != nil {
-		return "", err
+	return a.store.GetConfig()
+}
+
+// UpdateConfig 更新配置
+func (a *App) UpdateConfig(config types.AppConfig) error {
+	if a.store == nil {
+		return fmt.Errorf("store not initialized")
 	}
-	a.logger.Info("Provider added", logger.Field{Key: "id", Value: provider.ID}, logger.Field{Key: "name", Value: provider.Name})
-	return provider.ID, nil
+
+	// 如果代理配置变更，重启代理服务器
+	oldConfig := a.store.GetConfig()
+	if oldConfig.ProxyConfig.Port != config.ProxyConfig.Port ||
+		oldConfig.ProxyConfig.Host != config.ProxyConfig.Host ||
+		oldConfig.ProxyConfig.Enabled != config.ProxyConfig.Enabled {
+
+		if a.proxyServer != nil {
+			a.proxyServer.Stop()
+		}
+
+		if config.ProxyConfig.Enabled {
+			go func() {
+				time.Sleep(500 * time.Millisecond)
+				a.proxyServer.Start(config.ProxyConfig.Port, config.ProxyConfig.Host)
+			}()
+		}
+	}
+
+	return a.store.UpdateConfig(config)
+}
+
+// GetAllProviders 获取所有提供商
+func (a *App) GetAllProviders() []types.Provider {
+	if a.store == nil {
+		return []types.Provider{}
+	}
+	return a.store.GetAllProviders()
+}
+
+// GetProvider 获取提供商
+func (a *App) GetProvider(id string) (*types.Provider, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("store not initialized")
+	}
+	return a.store.GetProviderByID(id)
+}
+
+// CreateProvider 创建提供商
+func (a *App) CreateProvider(provider types.Provider) error {
+	if a.store == nil {
+		return fmt.Errorf("store not initialized")
+	}
+	return a.store.CreateProvider(provider)
 }
 
 // UpdateProvider 更新提供商
-func (a *App) UpdateProvider(id string, updates *types.Provider) error {
-	_, err := a.storeManager.UpdateProvider(id, updates)
-	if err != nil {
-		return err
+func (a *App) UpdateProvider(id string, updates map[string]interface{}) error {
+	if a.store == nil {
+		return fmt.Errorf("store not initialized")
 	}
-	a.logger.Info("Provider updated", logger.Field{Key: "id", Value: id})
-	return nil
+	return a.store.UpdateProvider(id, updates)
 }
 
 // DeleteProvider 删除提供商
 func (a *App) DeleteProvider(id string) error {
-	err := a.storeManager.DeleteProvider(id)
-	if err != nil {
-		return err
+	if a.store == nil {
+		return fmt.Errorf("store not initialized")
 	}
-	a.logger.Info("Provider deleted", logger.Field{Key: "id", Value: id})
-	return nil
+	return a.store.DeleteProvider(id)
 }
 
-// ==================== 账户 API ====================
-
-// GetAccounts 获取所有账户
-func (a *App) GetAccounts(includeCredentials bool) []types.Account {
-	return a.storeManager.GetAccounts(includeCredentials)
-}
-
-// GetAccountById 根据 ID 获取账户
-func (a *App) GetAccountById(id string, includeCredentials bool) *types.Account {
-	return a.storeManager.GetAccountById(id, includeCredentials)
-}
-
-// GetAccountsByProviderId 获取指定提供商的账户
-func (a *App) GetAccountsByProviderId(providerId string, includeCredentials bool) []types.Account {
-	return a.storeManager.GetAccountsByProviderId(providerId, includeCredentials)
-}
-
-// AddAccount 添加账户
-func (a *App) AddAccount(account *types.Account) (string, error) {
-	if account.ID == "" {
-		account.ID = store.GenerateId()
+// GetAllAccounts 获取所有账户
+func (a *App) GetAllAccounts() []types.Account {
+	if a.store == nil {
+		return []types.Account{}
 	}
-	err := a.storeManager.AddAccount(account)
-	if err != nil {
-		return "", err
+	return a.store.GetAllAccounts()
+}
+
+// GetAccountsByProvider 获取提供商账户
+func (a *App) GetAccountsByProvider(providerID string) []types.Account {
+	if a.store == nil {
+		return []types.Account{}
 	}
-	a.logger.Info("Account added", logger.Field{Key: "id", Value: account.ID}, logger.Field{Key: "providerId", Value: account.ProviderID})
-	return account.ID, nil
+	return a.store.GetAccountsByProviderID(providerID, false)
+}
+
+// CreateAccount 创建账户
+func (a *App) CreateAccount(providerID, name string, credentials map[string]string) (*types.Account, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("store not initialized")
+	}
+	return a.store.CreateAccount(providerID, name, credentials)
 }
 
 // UpdateAccount 更新账户
-func (a *App) UpdateAccount(id string, updates *types.Account) error {
-	_, err := a.storeManager.UpdateAccount(id, updates)
-	if err != nil {
-		return err
+func (a *App) UpdateAccount(id string, updates map[string]interface{}) error {
+	if a.store == nil {
+		return fmt.Errorf("store not initialized")
 	}
-	a.logger.Info("Account updated", logger.Field{Key: "id", Value: id})
-	return nil
+	return a.store.UpdateAccount(id, updates)
 }
 
 // DeleteAccount 删除账户
 func (a *App) DeleteAccount(id string) error {
-	err := a.storeManager.DeleteAccount(id)
-	if err != nil {
-		return err
+	if a.store == nil {
+		return fmt.Errorf("store not initialized")
 	}
-	a.logger.Info("Account deleted", logger.Field{Key: "id", Value: id})
-	return nil
+	return a.store.DeleteAccount(id)
 }
 
-// UpdateAccountCredentials 更新账户凭证
-func (a *App) UpdateAccountCredentials(id string, credentials map[string]string) error {
-	return a.storeManager.UpdateAccountCredentials(id, credentials)
-}
-
-// ==================== 配置 API ====================
-
-// GetConfig 获取配置
-func (a *App) GetConfig() *types.AppConfig {
-	return a.storeManager.GetConfig()
-}
-
-// UpdateConfig 更新配置
-func (a *App) UpdateConfig(updates map[string]interface{}) error {
-	_, err := a.storeManager.UpdateConfig(updates)
-	if err != nil {
-		return err
+// GetProxyStatus 获取代理状态
+func (a *App) GetProxyStatus() *types.ProxyStatus {
+	if a.proxyServer == nil {
+		return &types.ProxyStatus{}
 	}
+	return a.proxyServer.GetStatus()
+}
 
-	// 如果端口或主机改变，重新启动代理
-	if _, hasPort := updates["serverPort"]; hasPort {
-		if status := a.proxyServer.GetStatus(); status.IsRunning {
-			config := a.storeManager.GetConfig()
-			a.proxyServer.Stop()
-			a.proxyServer.Start(config.ProxyPort, config.ProxyHost)
-		}
+// GetStatistics 获取统计信息
+func (a *App) GetStatistics() types.Statistics {
+	if a.store == nil {
+		return types.Statistics{}
 	}
-
-	a.logger.Info("Config updated")
-	return nil
+	return a.store.GetStatistics()
 }
-
-// UpdateConfigStruct 更新完整配置
-func (a *App) UpdateConfigStruct(config types.AppConfig) error {
-	return a.storeManager.UpdateConfigStruct(config)
-}
-
-// GenerateApiKey 生成新的 API Key
-func (a *App) GenerateApiKey(name string) types.ApiKey {
-	return a.storeManager.GenerateApiKey(name)
-}
-
-// DeleteApiKey 删除 API Key
-func (a *App) DeleteApiKey(id string) error {
-	return a.storeManager.DeleteApiKey(id)
-}
-
-// ==================== 代理服务器 API ====================
 
 // StartProxy 启动代理
 func (a *App) StartProxy(port int, host string) bool {
+	if a.proxyServer == nil {
+		return false
+	}
 	return a.proxyServer.Start(port, host)
 }
 
 // StopProxy 停止代理
 func (a *App) StopProxy() bool {
+	if a.proxyServer == nil {
+		return false
+	}
 	return a.proxyServer.Stop()
 }
 
-// GetProxyStatus 获取代理状态
-func (a *App) GetProxyStatus() *proxy.ProxyStatus {
-	return a.proxyServer.GetStatus()
+// GetRequestLogs 获取请求日志
+func (a *App) GetRequestLogs(limit, offset int) []*types.RequestLogEntry {
+	if a.store == nil {
+		return []*types.RequestLogEntry{}
+	}
+	return a.store.GetRequestLogs(limit, offset)
 }
 
-// GetProxyStatistics 获取代理统计
-func (a *App) GetProxyStatistics() *proxy.Statistics {
-	return a.proxyServer.GetStatistics()
+// GetModelMappings 获取模型映射
+func (a *App) GetModelMappings() []types.ModelMapping {
+	if a.store == nil {
+		return []types.ModelMapping{}
+	}
+	return a.store.GetAllModelMappings()
 }
 
-// ==================== OAuth API ====================
-
-// GetOAuthAuthURL 获取认证 URL
-func (a *App) GetOAuthAuthURL(providerType string) (string, error) {
-	return a.oauthManager.GetAuthURL(providerType)
+// CreateModelMapping 创建模型映射
+func (a *App) CreateModelMapping(mapping types.ModelMapping) error {
+	if a.store == nil {
+		return fmt.Errorf("store not initialized")
+	}
+	return a.store.CreateModelMapping(mapping)
 }
 
-// StartOAuthLogin 开始 OAuth 登录
-func (a *App) StartOAuthLogin(providerId string, providerType string) *oauth.OAuthResult {
-	return a.oauthManager.StartLogin(providerId, providerType)
+// UpdateModelMapping 更新模型映射
+func (a *App) UpdateModelMapping(id string, mappings []types.ModelMappingEntry) error {
+	if a.store == nil {
+		return fmt.Errorf("store not initialized")
+	}
+	return a.store.UpdateModelMapping(id, mappings)
 }
 
-// OAuthLoginWithToken 使用 Token 登录
-func (a *App) OAuthLoginWithToken(providerType string, token string) *oauth.OAuthResult {
-	return a.oauthManager.LoginWithToken(providerType, token)
-}
-
-// ValidateOAuthToken 验证 Token
-func (a *App) ValidateOAuthToken(providerType string, credentials map[string]string) *oauth.TokenValidationResult {
-	return a.oauthManager.ValidateToken(providerType, credentials)
-}
-
-// RefreshOAuthToken 刷新 Token
-func (a *App) RefreshOAuthToken(providerType string, credentials map[string]string) *oauth.TokenValidationResult {
-	return a.oauthManager.RefreshToken(providerType, credentials)
-}
-
-// HandleOAuthCallback 处理回调
-func (a *App) HandleOAuthCallback(providerType string, callbackURL string) *oauth.OAuthResult {
-	return a.oauthManager.HandleCallback(providerType, callbackURL)
-}
-
-// GetSupportedOAuthProviders 获取支持的提供商
-func (a *App) GetSupportedOAuthProviders() []string {
-	return a.oauthManager.GetSupportedProviders()
-}
-
-// ==================== 会话 API ====================
-
-// GetActiveSessions 获取活跃会话
-func (a *App) GetActiveSessions() []types.SessionRecord {
-	return a.sessionManager.GetActiveSessions()
+// GetSessions 获取会话
+func (a *App) GetSessions() []types.SessionRecord {
+	return []types.SessionRecord{}
 }
 
 // CreateSession 创建会话
-func (a *App) CreateSession(providerId, accountId, providerType string, credentials map[string]string) (*types.SessionRecord, error) {
-	return a.sessionManager.CreateSession(providerId, accountId, providerType, credentials)
+func (a *App) CreateSession(model string, messages []types.ChatMessage) *types.SessionRecord {
+	if a.store == nil {
+		return nil
+	}
+	return a.store.CreateSession(model, messages)
+}
+
+// GetSession 获取会话
+func (a *App) GetSession(id string) (*types.SessionRecord, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("store not initialized")
+	}
+	return a.store.GetSession(id)
+}
+
+// UpdateSession 更新会话
+func (a *App) UpdateSession(id string, messages []types.ChatMessage) error {
+	if a.store == nil {
+		return fmt.Errorf("store not initialized")
+	}
+	return a.store.UpdateSession(id, messages)
 }
 
 // DeleteSession 删除会话
-func (a *App) DeleteSession(sessionId string) error {
-	return a.sessionManager.DeleteSession(sessionId)
-}
-
-// ClearAllSessions 清除所有会话
-func (a *App) ClearAllSessions() error {
-	return a.sessionManager.ClearAllSessions()
-}
-
-// ==================== 窗口控制 API ====================
-
-// ShowWindow 显示窗口
-func (a *App) ShowWindow() bool {
-	return a.windowManager.Show()
-}
-
-// HideWindow 隐藏窗口
-func (a *App) HideWindow() bool {
-	return a.windowManager.Hide()
-}
-
-// MinimizeWindow 最小化
-func (a *App) MinimizeWindow() bool {
-	return a.windowManager.Minimize()
-}
-
-// ToggleWindow 切换显示
-func (a *App) ToggleWindow() bool {
-	return a.windowManager.Toggle()
-}
-
-// SetWindowTitle 设置标题
-func (a *App) SetWindowTitle(title string) bool {
-	return a.windowManager.SetTitle(title)
-}
-
-// NavigateWindow 导航
-func (a *App) NavigateWindow(path string) bool {
-	return a.windowManager.Navigate(path)
-}
-
-// ==================== 系统对话框 API ====================
-
-// ShowOpenDialog 显示打开对话框
-func (a *App) ShowOpenDialog(title string, filter string) (string, error) {
-	options := runtime.OpenDialogOptions{
-		Title: title,
+func (a *App) DeleteSession(id string) error {
+	if a.store == nil {
+		return fmt.Errorf("store not initialized")
 	}
-
-	if filter != "" {
-		options.Filters = []runtime.FileFilter{
-			{DisplayName: "Files", Pattern: filter},
-		}
-	}
-
-	return runtime.OpenFileDialog(a.ctx, options)
+	return a.store.DeleteSession(id)
 }
 
-// ShowSaveDialog 显示保存对话框
-func (a *App) ShowSaveDialog(title string, defaultFilename string) (string, error) {
-	options := runtime.SaveDialogOptions{
-		Title:                      title,
-		DefaultFilename:            defaultFilename,
+// GetLogs 获取日志
+func (a *App) GetLogs(options logger.LogOptions) []logger.LogEntry {
+	if a.logger == nil {
+		return []logger.LogEntry{}
 	}
-
-	return runtime.SaveFileDialog(a.ctx, options)
-}
-
-// ShowMessageDialog 显示消息对话框
-func (a *App) ShowMessageDialog(messageType string, title string, message string) string {
-	var dialogType runtime.DialogType
-	switch messageType {
-	case "info":
-		dialogType = runtime.InfoDialog
-	case "warning":
-		dialogType = runtime.WarningDialog
-	case "error":
-		dialogType = runtime.ErrorDialog
-	case "question":
-		dialogType = runtime.QuestionDialog
-	default:
-		dialogType = runtime.InfoDialog
-	}
-
-	result, err := runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
-		Type:    dialogType,
-		Title:   title,
-		Message: message,
+	return a.logger.GetLogs(logger.LogFilter{
+		Level:  logger.LogLevel(options.Level),
+		Limit:  options.Limit,
+		Offset: options.Offset,
 	})
-
-	if err != nil {
-		return "error"
-	}
-
-	return result
 }
 
-// ==================== 其他实用 API ====================
-
-// OpenExternal 在浏览器中打开 URL
-func (a *App) OpenExternal(url string) bool {
-	runtime.BrowserOpenURL(a.ctx, url)
-	a.logger.Info("Open external URL", logger.Field{Key: "url", Value: url})
-	return true
-}
-
-// GetAppInfo 获取应用信息
-func (a *App) GetAppInfo() map[string]interface{} {
-	config := a.storeManager.GetConfig()
-	return map[string]interface{}{
-		"name":         "Chat2API",
-		"version":      "1.0.0",
-		"description":  "Chat2API Wails 版本",
-		"config":       config,
-		"proxyStatus":  a.proxyServer.GetStatus(),
+// ClearLogs 清除日志
+func (a *App) ClearLogs() {
+	if a.logger != nil {
+		a.logger.Clear()
 	}
 }
 
-// GetStorePath 获取存储路径
-func (a *App) GetStorePath() string {
-	return a.storeManager.GetBasePath()
-}
+// ==================== 辅助函数 ====================
 
-// LogCustomMessage 自定义日志记录
-func (a *App) LogCustomMessage(level string, message string, data map[string]interface{}) {
-	fields := make([]logger.Field, 0, len(data))
-	for k, v := range data {
-		fields = append(fields, logger.Field{Key: k, Value: fmt.Sprintf("%v", v)})
-	}
-
-	switch level {
-	case "debug":
-		a.logger.Debug(message, fields...)
-	case "warn":
-		a.logger.Warn(message, fields...)
-	case "error":
-		a.logger.Error(message, fields...)
-	case "info":
-		fallthrough
-	default:
-		a.logger.Info(message, fields...)
+func getUserDataDir() (string, error) {
+	platform := runtime.GOOS
+	switch platform {
+	case "windows":
+		return filepath.Join(os.Getenv("APPDATA"), "Chat2API"), nil
+	case "darwin":
+		return filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "Chat2API"), nil
+	default: // linux
+		return filepath.Join(os.Getenv("HOME"), ".config", "Chat2API"), nil
 	}
 }
 
-// DebugDumpState 调试：转储当前状态
-func (a *App) DebugDumpState() string {
-	data := map[string]interface{}{
-		"config":       a.storeManager.GetConfig(),
-		"providers":    a.storeManager.GetProviders(),
-		"accounts":     a.storeManager.GetAccounts(false),
-		"proxyStatus":  a.proxyServer.GetStatus(),
+// ==================== 静态资源 ====================
+
+//go:embed frontend/dist
+var assets embed.FS
+
+// ==================== 应用入口 ====================
+
+func main() {
+	// 创建应用实例
+	app := NewApp()
+
+	// 创建 Wails 应用
+	wa := &options.App{
+		Title:            "Chat2API",
+		Width:            1200,
+		Height:           800,
+		MinWidth:         800,
+		MinHeight:        600,
+		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 255},
+		OnStartup:        app.startup,
+		OnDomReady:       app.domReady,
+		OnBeforeClose:    app.beforeClose,
+		OnShutdown:       app.shutdown,
+		AssetServer: &assetserver.Options{
+			Assets: assets,
+		},
+		Bind: []interface{}{
+			app,
+		},
+		// macOS 特定配置
+		Mac: &mac.Options{
+			TitleBar: mac.TitleBarDefault(),
+		},
+		// Windows 特定配置
+		Windows: &windows.Options{
+			WebviewIsTransparent: false,
+		},
 	}
 
-	jsonBytes, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
+	// 运行应用
+	if err := wails.Run(wa); err != nil {
+		log.Fatal(err)
 	}
-
-	return string(jsonBytes)
 }

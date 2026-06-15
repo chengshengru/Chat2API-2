@@ -44,226 +44,6 @@ export namespace logger {
 	        this.keyword = source["keyword"];
 	    }
 	}
-	export class PaginatedResult {
-	    items: LogEntry[];
-	    total: number;
-	    page: number;
-	    size: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new PaginatedResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.items = this.convertValues(source["items"], LogEntry);
-	        this.total = source["total"];
-	        this.page = source["page"];
-	        this.size = source["size"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class PersistentStatistics {
-	    totalRequests: number;
-	    successRequests: number;
-	    failedRequests: number;
-	    totalLatency: number;
-	    lastUpdated: number;
-	    modelUsage: Record<string, string>;
-	    providerUsage: Record<string, string>;
-	    accountUsage: Record<string, string>;
-	    dailyStats: Record<string, string>;
-	
-	    static createFrom(source: any = {}) {
-	        return new PersistentStatistics(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.totalRequests = source["totalRequests"];
-	        this.successRequests = source["successRequests"];
-	        this.failedRequests = source["failedRequests"];
-	        this.totalLatency = source["totalLatency"];
-	        this.lastUpdated = source["lastUpdated"];
-	        this.modelUsage = source["modelUsage"];
-	        this.providerUsage = source["providerUsage"];
-	        this.accountUsage = source["accountUsage"];
-	        this.dailyStats = source["dailyStats"];
-	    }
-	}
-
-}
-
-export namespace oauth {
-	
-	export class AccountInfo {
-	    userId?: string;
-	    name?: string;
-	    email?: string;
-	    quota?: number;
-	    used?: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new AccountInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.userId = source["userId"];
-	        this.name = source["name"];
-	        this.email = source["email"];
-	        this.quota = source["quota"];
-	        this.used = source["used"];
-	    }
-	}
-	export class OAuthResult {
-	    success: boolean;
-	    providerId?: string;
-	    providerType?: string;
-	    credentials?: Record<string, string>;
-	    account?: types.Account;
-	    accountInfo?: AccountInfo;
-	    error?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new OAuthResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.providerId = source["providerId"];
-	        this.providerType = source["providerType"];
-	        this.credentials = source["credentials"];
-	        this.account = this.convertValues(source["account"], types.Account);
-	        this.accountInfo = this.convertValues(source["accountInfo"], AccountInfo);
-	        this.error = source["error"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class TokenValidationResult {
-	    valid: boolean;
-	    tokenType?: string;
-	    expiresAt?: number;
-	    accountInfo?: AccountInfo;
-	    error?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new TokenValidationResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.valid = source["valid"];
-	        this.tokenType = source["tokenType"];
-	        this.expiresAt = source["expiresAt"];
-	        this.accountInfo = this.convertValues(source["accountInfo"], AccountInfo);
-	        this.error = source["error"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-
-}
-
-export namespace proxy {
-	
-	export class ProxyStatus {
-	    isRunning: boolean;
-	    port: number;
-	    host: string;
-	    uptime: number;
-	    startedAt: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new ProxyStatus(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.isRunning = source["isRunning"];
-	        this.port = source["port"];
-	        this.host = source["host"];
-	        this.uptime = source["uptime"];
-	        this.startedAt = source["startedAt"];
-	    }
-	}
-	export class Statistics {
-	    totalRequests: number;
-	    successRequests: number;
-	    failedRequests: number;
-	    activeConnections: number;
-	    totalLatency: number;
-	    lastUpdated: number;
-	    modelUsage: Record<string, number>;
-	    providerUsage: Record<string, number>;
-	
-	    static createFrom(source: any = {}) {
-	        return new Statistics(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.totalRequests = source["totalRequests"];
-	        this.successRequests = source["successRequests"];
-	        this.failedRequests = source["failedRequests"];
-	        this.activeConnections = source["activeConnections"];
-	        this.totalLatency = source["totalLatency"];
-	        this.lastUpdated = source["lastUpdated"];
-	        this.modelUsage = source["modelUsage"];
-	        this.providerUsage = source["providerUsage"];
-	    }
-	}
 
 }
 
@@ -274,7 +54,7 @@ export namespace types {
 	    providerId: string;
 	    name: string;
 	    email?: string;
-	    credentials?: Record<string, string>;
+	    credentials: Record<string, string>;
 	    status: string;
 	    lastUsed?: number;
 	    createdAt: number;
@@ -307,13 +87,13 @@ export namespace types {
 	}
 	export class ApiKey {
 	    id: string;
-	    name: string;
 	    key: string;
+	    name: string;
 	    enabled: boolean;
-	    createdAt: number;
-	    lastUsedAt?: number;
-	    usageCount: number;
-	    description?: string;
+	    // Go type: time
+	    createdAt: any;
+	    // Go type: time
+	    expiresAt?: any;
 	
 	    static createFrom(source: any = {}) {
 	        return new ApiKey(source);
@@ -322,19 +102,36 @@ export namespace types {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
-	        this.name = source["name"];
 	        this.key = source["key"];
+	        this.name = source["name"];
 	        this.enabled = source["enabled"];
-	        this.createdAt = source["createdAt"];
-	        this.lastUsedAt = source["lastUsedAt"];
-	        this.usageCount = source["usageCount"];
-	        this.description = source["description"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	        this.expiresAt = this.convertValues(source["expiresAt"], null);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ManagementApiConfig {
-	    enableManagementApi: boolean;
-	    managementApiSecret: string;
-	    managementApiPort?: number;
+	    enabled: boolean;
+	    port: number;
+	    host: string;
+	    authToken?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ManagementApiConfig(source);
@@ -342,18 +139,55 @@ export namespace types {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.enableManagementApi = source["enableManagementApi"];
-	        this.managementApiSecret = source["managementApiSecret"];
-	        this.managementApiPort = source["managementApiPort"];
+	        this.enabled = source["enabled"];
+	        this.port = source["port"];
+	        this.host = source["host"];
+	        this.authToken = source["authToken"];
+	    }
+	}
+	export class LoadBalanceConfig {
+	    strategy: string;
+	    excludeFailed: boolean;
+	    recoveryTime: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LoadBalanceConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.strategy = source["strategy"];
+	        this.excludeFailed = source["excludeFailed"];
+	        this.recoveryTime = source["recoveryTime"];
+	    }
+	}
+	export class ContextManagementConfig {
+	    enabled: boolean;
+	    maxContextMessages: number;
+	    summaryModel?: string;
+	    summaryThreshold: number;
+	    enableAutoSummary: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContextManagementConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.maxContextMessages = source["maxContextMessages"];
+	        this.summaryModel = source["summaryModel"];
+	        this.summaryThreshold = source["summaryThreshold"];
+	        this.enableAutoSummary = source["enableAutoSummary"];
 	    }
 	}
 	export class ToolCallingConfig {
 	    enabled: boolean;
-	    promptMode: string;
-	    customTemplate?: string;
-	    maxToolsPerRequest: number;
-	    maxRetries: number;
-	    timeoutSeconds: number;
+	    forceAdapter?: string;
+	    allowedProtocols?: string[];
+	    disabledProtocols?: string[];
+	    customPromptTemplate?: string;
+	    diagnosticsEnabled: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ToolCallingConfig(source);
@@ -362,18 +196,17 @@ export namespace types {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
-	        this.promptMode = source["promptMode"];
-	        this.customTemplate = source["customTemplate"];
-	        this.maxToolsPerRequest = source["maxToolsPerRequest"];
-	        this.maxRetries = source["maxRetries"];
-	        this.timeoutSeconds = source["timeoutSeconds"];
+	        this.forceAdapter = source["forceAdapter"];
+	        this.allowedProtocols = source["allowedProtocols"];
+	        this.disabledProtocols = source["disabledProtocols"];
+	        this.customPromptTemplate = source["customPromptTemplate"];
+	        this.diagnosticsEnabled = source["diagnosticsEnabled"];
 	    }
 	}
 	export class SessionConfig {
-	    sessionTimeout: number;
-	    maxMessagesPerSession: number;
-	    deleteAfterTimeout: boolean;
-	    maxSessionsPerAccount: number;
+	    enabled: boolean;
+	    maxHistoryLength: number;
+	    deleteAfterChat: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SessionConfig(source);
@@ -381,62 +214,37 @@ export namespace types {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.sessionTimeout = source["sessionTimeout"];
-	        this.maxMessagesPerSession = source["maxMessagesPerSession"];
-	        this.deleteAfterTimeout = source["deleteAfterTimeout"];
-	        this.maxSessionsPerAccount = source["maxSessionsPerAccount"];
+	        this.enabled = source["enabled"];
+	        this.maxHistoryLength = source["maxHistoryLength"];
+	        this.deleteAfterChat = source["deleteAfterChat"];
 	    }
 	}
-	export class RequestLogConfig {
+	export class ProxyConfig {
 	    enabled: boolean;
-	    maxEntries: number;
-	    includeBodies: boolean;
-	    maxBodyChars: number;
-	    redactSensitiveData: boolean;
+	    port: number;
+	    host: string;
+	    enableApiKey: boolean;
+	    apiKeys?: ApiKey[];
+	    sessionConfig: SessionConfig;
+	    toolCallingConfig: ToolCallingConfig;
+	    contextConfig: ContextManagementConfig;
+	    loadBalanceConfig: LoadBalanceConfig;
 	
 	    static createFrom(source: any = {}) {
-	        return new RequestLogConfig(source);
+	        return new ProxyConfig(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
-	        this.maxEntries = source["maxEntries"];
-	        this.includeBodies = source["includeBodies"];
-	        this.maxBodyChars = source["maxBodyChars"];
-	        this.redactSensitiveData = source["redactSensitiveData"];
-	    }
-	}
-	export class ModelMapping {
-	    requestModel: string;
-	    actualModel: string;
-	    preferredProviderId?: string;
-	    preferredAccountId?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ModelMapping(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.requestModel = source["requestModel"];
-	        this.actualModel = source["actualModel"];
-	        this.preferredProviderId = source["preferredProviderId"];
-	        this.preferredAccountId = source["preferredAccountId"];
-	    }
-	}
-	export class ModelMappingEntry {
-	    key: string;
-	    value: ModelMapping;
-	
-	    static createFrom(source: any = {}) {
-	        return new ModelMappingEntry(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.key = source["key"];
-	        this.value = this.convertValues(source["value"], ModelMapping);
+	        this.port = source["port"];
+	        this.host = source["host"];
+	        this.enableApiKey = source["enableApiKey"];
+	        this.apiKeys = this.convertValues(source["apiKeys"], ApiKey);
+	        this.sessionConfig = this.convertValues(source["sessionConfig"], SessionConfig);
+	        this.toolCallingConfig = this.convertValues(source["toolCallingConfig"], ToolCallingConfig);
+	        this.contextConfig = this.convertValues(source["contextConfig"], ContextManagementConfig);
+	        this.loadBalanceConfig = this.convertValues(source["loadBalanceConfig"], LoadBalanceConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -458,26 +266,11 @@ export namespace types {
 		}
 	}
 	export class AppConfig {
-	    proxyPort: number;
-	    proxyHost: string;
-	    loadBalanceStrategy: string;
-	    modelMappings: ModelMappingEntry[];
+	    proxyConfig: ProxyConfig;
+	    managementConfig: ManagementApiConfig;
 	    theme: string;
+	    startMinimized: boolean;
 	    autoStart: boolean;
-	    autoStartProxy: boolean;
-	    minimizeToTray: boolean;
-	    logLevel: string;
-	    logRetentionDays: number;
-	    requestLogConfig: RequestLogConfig;
-	    requestTimeout: number;
-	    retryCount: number;
-	    apiKeys: ApiKey[];
-	    enableApiKey: boolean;
-	    oauthProxyMode: string;
-	    sessionConfig: SessionConfig;
-	    toolCallingConfig: ToolCallingConfig;
-	    managementApi: ManagementApiConfig;
-	    language: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -485,26 +278,97 @@ export namespace types {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.proxyPort = source["proxyPort"];
-	        this.proxyHost = source["proxyHost"];
-	        this.loadBalanceStrategy = source["loadBalanceStrategy"];
-	        this.modelMappings = this.convertValues(source["modelMappings"], ModelMappingEntry);
+	        this.proxyConfig = this.convertValues(source["proxyConfig"], ProxyConfig);
+	        this.managementConfig = this.convertValues(source["managementConfig"], ManagementApiConfig);
 	        this.theme = source["theme"];
+	        this.startMinimized = source["startMinimized"];
 	        this.autoStart = source["autoStart"];
-	        this.autoStartProxy = source["autoStartProxy"];
-	        this.minimizeToTray = source["minimizeToTray"];
-	        this.logLevel = source["logLevel"];
-	        this.logRetentionDays = source["logRetentionDays"];
-	        this.requestLogConfig = this.convertValues(source["requestLogConfig"], RequestLogConfig);
-	        this.requestTimeout = source["requestTimeout"];
-	        this.retryCount = source["retryCount"];
-	        this.apiKeys = this.convertValues(source["apiKeys"], ApiKey);
-	        this.enableApiKey = source["enableApiKey"];
-	        this.oauthProxyMode = source["oauthProxyMode"];
-	        this.sessionConfig = this.convertValues(source["sessionConfig"], SessionConfig);
-	        this.toolCallingConfig = this.convertValues(source["toolCallingConfig"], ToolCallingConfig);
-	        this.managementApi = this.convertValues(source["managementApi"], ManagementApiConfig);
-	        this.language = source["language"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ToolFunction {
+	    name: string;
+	    arguments: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolFunction(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.arguments = source["arguments"];
+	    }
+	}
+	export class ToolCall {
+	    id: string;
+	    type: string;
+	    function: ToolFunction;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolCall(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.type = source["type"];
+	        this.function = this.convertValues(source["function"], ToolFunction);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ChatMessage {
+	    role: string;
+	    content: string;
+	    name?: string;
+	    tool_call_id?: string;
+	    tool_calls?: ToolCall[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ChatMessage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.content = source["content"];
+	        this.name = source["name"];
+	        this.tool_call_id = source["tool_call_id"];
+	        this.tool_calls = this.convertValues(source["tool_calls"], ToolCall);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -528,6 +392,65 @@ export namespace types {
 	
 	
 	
+	export class ModelMappingEntry {
+	    clientModel: string;
+	    providerId: string;
+	    accountId: string;
+	    providerModel: string;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelMappingEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.clientModel = source["clientModel"];
+	        this.providerId = source["providerId"];
+	        this.accountId = source["accountId"];
+	        this.providerModel = source["providerModel"];
+	        this.enabled = source["enabled"];
+	    }
+	}
+	export class ModelMapping {
+	    id: string;
+	    name: string;
+	    mappings: ModelMappingEntry[];
+	    createdAt: number;
+	    updatedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelMapping(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.mappings = this.convertValues(source["mappings"], ModelMappingEntry);
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class Provider {
 	    id: string;
 	    name: string;
@@ -542,9 +465,6 @@ export namespace types {
 	    description?: string;
 	    icon?: string;
 	    supportedModels?: string[];
-	    modelMappings?: Record<string, string>;
-	    status?: string;
-	    lastStatusCheck?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Provider(source);
@@ -565,28 +485,72 @@ export namespace types {
 	        this.description = source["description"];
 	        this.icon = source["icon"];
 	        this.supportedModels = source["supportedModels"];
-	        this.modelMappings = source["modelMappings"];
-	        this.status = source["status"];
-	        this.lastStatusCheck = source["lastStatusCheck"];
 	    }
 	}
 	
+	export class ProxyStatus {
+	    isRunning: boolean;
+	    port: number;
+	    host: string;
+	    startedAt: number;
+	    uptime: number;
+	    addr: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxyStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.isRunning = source["isRunning"];
+	        this.port = source["port"];
+	        this.host = source["host"];
+	        this.startedAt = source["startedAt"];
+	        this.uptime = source["uptime"];
+	        this.addr = source["addr"];
+	    }
+	}
+	export class RequestLogEntry {
+	    id: string;
+	    timestamp: number;
+	    providerId: string;
+	    accountId: string;
+	    model: string;
+	    requestBody: Record<string, any>;
+	    responseBody?: Record<string, any>;
+	    statusCode: number;
+	    latency: number;
+	    success: boolean;
+	    errorMessage?: string;
+	    redacted: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RequestLogEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.timestamp = source["timestamp"];
+	        this.providerId = source["providerId"];
+	        this.accountId = source["accountId"];
+	        this.model = source["model"];
+	        this.requestBody = source["requestBody"];
+	        this.responseBody = source["responseBody"];
+	        this.statusCode = source["statusCode"];
+	        this.latency = source["latency"];
+	        this.success = source["success"];
+	        this.errorMessage = source["errorMessage"];
+	        this.redacted = source["redacted"];
+	    }
+	}
 	
 	export class SessionRecord {
 	    id: string;
-	    providerId: string;
-	    accountId: string;
-	    providerType?: string;
-	    sessionKey?: string;
-	    providerSessionId: string;
-	    parentMessageId?: string;
-	    sessionType: string;
-	    messages: string[];
-	    credentials?: Record<string, string>;
+	    model: string;
+	    messages: ChatMessage[];
 	    createdAt: number;
-	    lastActiveAt: number;
-	    status: string;
-	    model?: string;
+	    updatedAt: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new SessionRecord(source);
@@ -595,21 +559,60 @@ export namespace types {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
-	        this.providerId = source["providerId"];
-	        this.accountId = source["accountId"];
-	        this.providerType = source["providerType"];
-	        this.sessionKey = source["sessionKey"];
-	        this.providerSessionId = source["providerSessionId"];
-	        this.parentMessageId = source["parentMessageId"];
-	        this.sessionType = source["sessionType"];
-	        this.messages = source["messages"];
-	        this.credentials = source["credentials"];
-	        this.createdAt = source["createdAt"];
-	        this.lastActiveAt = source["lastActiveAt"];
-	        this.status = source["status"];
 	        this.model = source["model"];
+	        this.messages = this.convertValues(source["messages"], ChatMessage);
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Statistics {
+	    totalRequests: number;
+	    successRequests: number;
+	    failedRequests: number;
+	    totalLatency: number;
+	    modelUsage: Record<string, string>;
+	    providerUsage: Record<string, string>;
+	    accountUsage: Record<string, string>;
+	    dailyStats: Record<string, string>;
+	    lastUpdated: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Statistics(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.totalRequests = source["totalRequests"];
+	        this.successRequests = source["successRequests"];
+	        this.failedRequests = source["failedRequests"];
+	        this.totalLatency = source["totalLatency"];
+	        this.modelUsage = source["modelUsage"];
+	        this.providerUsage = source["providerUsage"];
+	        this.accountUsage = source["accountUsage"];
+	        this.dailyStats = source["dailyStats"];
+	        this.lastUpdated = source["lastUpdated"];
 	    }
 	}
+	
+	
 
 }
 

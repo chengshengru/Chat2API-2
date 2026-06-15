@@ -1,13 +1,15 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,64 +18,87 @@ import (
 	"chat2api-wails/internal/types"
 )
 
-// ProxyStatus 代理服务器状态
+// ProxyServer HTTP代理服务器
+type ProxyServer struct {
+	mu      sync.RWMutex
+	store   *store.StoreManager
+	logger  *logger.Logger
+	server  *http.Server
+	router  *http.ServeMux
+	status  types.ProxyStatus
+	stats   types.Statistics
+
+	// 负载均衡索引
+	roundRobinIndex map[string]int
+	failedAccounts  map[string]*failedAccountInfo
+}
+
+type failedAccountInfo struct {
+	Count       int
+	LastFailTime int64
+}
+
+// ProxyStatus 代理状态
 type ProxyStatus struct {
-	IsRunning bool   `json:"isRunning"`
+	IsRunning  bool   `json:"isRunning"`
 	Port      int    `json:"port"`
 	Host      string `json:"host"`
-	Uptime    int64  `json:"uptime"`
 	StartedAt int64  `json:"startedAt"`
+	Uptime    int64  `json:"uptime"`
+	Addr      string `json:"addr"`
 }
 
-// Statistics 代理服务器统计
+// Statistics 统计信息
 type Statistics struct {
-	TotalRequests    int64          `json:"totalRequests"`
-	SuccessRequests  int64          `json:"successRequests"`
-	FailedRequests   int64          `json:"failedRequests"`
-	ActiveConnections int64          `json:"activeConnections"`
-	TotalLatency     int64          `json:"totalLatency"`
-	LastUpdated      int64          `json:"lastUpdated"`
-	ModelUsage       map[string]int `json:"modelUsage"`
-	ProviderUsage    map[string]int `json:"providerUsage"`
+	TotalRequests   int64                `json:"totalRequests"`
+	SuccessRequests int64                `json:"successRequests"`
+	FailedRequests  int64                `json:"failedRequests"`
+	TotalLatency    int64                `json:"totalLatency"`
+	ModelUsage      map[string]string    `json:"modelUsage"`
+	ProviderUsage   map[string]string    `json:"providerUsage"`
+	AccountUsage    map[string]string    `json:"accountUsage"`
+	LastUpdated     int64                `json:"lastUpdated"`
 }
 
-// ForwardRequest 转发请求结构
-type ForwardRequest struct {
-	Method      string
-	URL         string
-	Headers     map[string]string
-	Body        []byte
-	Timeout     time.Duration
-	IsStream    bool
-	ProviderID  string
-	AccountID   string
-	Model       string
-}
-
-// ProxyServer 代理服务器核心
-type ProxyServer struct {
-	mu            sync.RWMutex
-	server        *http.Server
-	router        *http.ServeMux
-	status        ProxyStatus
-	stats         Statistics
-	logger        *logger.Logger
-	storeManager  *store.StoreManager
-}
-
-// NewServer 创建新的代理服务器
+// NewServer 创建代理服务器
 func NewServer(sm *store.StoreManager, l *logger.Logger) *ProxyServer {
-	s := &ProxyServer{
-		logger:       l,
-		storeManager: sm,
-		stats: Statistics{
-			ModelUsage:    make(map[string]int),
-			ProviderUsage: make(map[string]int),
+	ps := &ProxyServer{
+		store:           sm,
+		logger:          l,
+		roundRobinIndex: make(map[string]int),
+		failedAccounts:  make(map[string]*failedAccountInfo),
+		status: types.ProxyStatus{
+			IsRunning: false,
+			Port:     8080,
+			Host:     "127.0.0.1",
+		},
+		stats: types.Statistics{
+			ModelUsage:    make(map[string]string),
+			ProviderUsage: make(map[string]string),
+			AccountUsage:  make(map[string]string),
 		},
 	}
+	ps.setupRoutes()
+	return ps
+}
 
-	s.setupRoutes()
-	return s
+// setupRoutes 设置路由
+func (ps *ProxyServer) setupRoutes() {
+	ps.router = http.NewServeMux()
+
+	// 健康检查
+	ps.router.HandleFunc("/", ps.handleHealth)
+	ps.router.HandleFunc("/health", ps.handleHealth)
+	ps.router.HandleFunc("/stats", ps.handleStats)
+
+	// OpenAI 兼容接口
+	ps.router.HandleFunc("/v1/chat/completions", ps.handleChatCompletions)
+	ps.router.HandleFunc("/v1/completions", ps.handleCompletions)
+	ps.router.HandleFunc("/v1/models", ps.handleModels)
+	ps.router.HandleFunc("/v1/models/", ps.handleGetModel)
+
+	// Management API
+	ps.router.HandleFunc("/v0/management/", ps.handleManagement)
 }
 
 // Start 启动代理服务器
@@ -96,7 +121,6 @@ func (ps *ProxyServer) Start(port int, host string) bool {
 	ps.status.Host = host
 	ps.status.StartedAt = time.Now().Unix()
 
-	// 启动 HTTP 服务器
 	go ps.startHTTPServer()
 
 	time.Sleep(100 * time.Millisecond)
@@ -134,7 +158,7 @@ func (ps *ProxyServer) Stop() bool {
 }
 
 // GetStatus 获取服务器状态
-func (ps *ProxyServer) GetStatus() *ProxyStatus {
+func (ps *ProxyServer) GetStatus() *types.ProxyStatus {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 
@@ -147,7 +171,7 @@ func (ps *ProxyServer) GetStatus() *ProxyStatus {
 }
 
 // GetStatistics 获取统计信息
-func (ps *ProxyServer) GetStatistics() *Statistics {
+func (ps *ProxyServer) GetStatistics() *types.Statistics {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 
@@ -156,8 +180,7 @@ func (ps *ProxyServer) GetStatistics() *Statistics {
 	return &stats
 }
 
-// ==================== HTTP 服务器实现 ====================
-
+// startHTTPServer 启动HTTP服务器
 func (ps *ProxyServer) startHTTPServer() {
 	ps.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", ps.status.Host, ps.status.Port),
@@ -175,27 +198,10 @@ func (ps *ProxyServer) startHTTPServer() {
 	}
 }
 
-// setupRoutes 设置路由
-func (ps *ProxyServer) setupRoutes() {
-	mux := http.NewServeMux()
-
-	// 健康检查
-	mux.HandleFunc("/", ps.handleHealth)
-	mux.HandleFunc("/health", ps.handleHealth)
-	mux.HandleFunc("/stats", ps.handleStats)
-
-	// OpenAI 兼容接口
-	mux.HandleFunc("/v1/chat/completions", ps.handleChatCompletions)
-	mux.HandleFunc("/v1/models", ps.handleModels)
-	mux.HandleFunc("/v1/models/", ps.handleGetModel)
-
-	ps.router = mux
-}
-
-// handleHealth 健康检查处理
+// handleHealth 健康检查
 func (ps *ProxyServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	status := ps.GetStatus()
-	stats := ps.GetStatistics()
+	stats := ps.store.GetStatistics()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -204,127 +210,174 @@ func (ps *ProxyServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleStats 统计信息处理
+// handleStats 统计信息
 func (ps *ProxyServer) handleStats(w http.ResponseWriter, r *http.Request) {
-	stats := ps.GetStatistics()
+	stats := ps.store.GetStatistics()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
 }
 
-// handleChatCompletions 聊天完成处理
+// handleChatCompletions 处理聊天补全请求
 func (ps *ProxyServer) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	requestID := fmt.Sprintf("chatcmpl-%d-%s", time.Now().Unix(), randomString(8))
+
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		ps.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
-	// API Key 认证
-	if !ps.validateApiKey(r) {
-		http.Error(w, "Invalid API key", http.StatusUnauthorized)
+	// 解析请求
+	var req types.ChatCompletionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		ps.writeError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 
-	// 读取请求体
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		ps.logger.Error("Failed to read request body", logger.Field{Key: "error", Value: err.Error()})
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	// 解析请求以获取模型名称
-	var req struct {
-		Model  string `json:"model"`
-		Stream bool   `json:"stream,omitempty"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		ps.logger.Error("Failed to parse request", logger.Field{Key: "error", Value: err.Error()})
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+	if req.Model == "" {
+		ps.writeError(w, http.StatusBadRequest, "Missing required field: model")
 		return
 	}
 
-	ps.logger.Info("Chat request",
-		logger.Field{Key: "model", Value: req.Model},
-		logger.Field{Key: "stream", Value: fmt.Sprintf("%t", req.Stream)},
-	)
-
-	// 选择提供商和账户
-	provider, account, err := ps.selectProviderAndAccount(req.Model)
-	if err != nil {
-		ps.logger.Error("No provider available", logger.Field{Key: "error", Value: err.Error()})
-		http.Error(w, "No provider available", http.StatusBadGateway)
+	if len(req.Messages) == 0 {
+		ps.writeError(w, http.StatusBadRequest, "Missing required field: messages")
 		return
 	}
+
+	// 获取配置
+	config := ps.store.GetConfig()
+
+	// API Key 验证
+	if config.ProxyConfig.EnableApiKey {
+		if !ps.validateAPIKey(r) {
+			ps.writeError(w, http.StatusUnauthorized, "Invalid API key")
+			return
+		}
+	}
+
+	// 负载均衡选择账户
+	selection := ps.selectAccount(req.Model, config.ProxyConfig.LoadBalanceConfig.Strategy)
+	if selection == nil {
+		ps.writeError(w, http.StatusServiceUnavailable, "No available account for model: "+req.Model)
+		return
+	}
+
+	account := selection.Account
+	provider := selection.Provider
+
+	// 记录请求开始
+	ps.recordRequestStart(req.Model, provider.ID, account.ID)
 
 	// 构建转发请求
-	targetURL := provider.APIEndpoint
-	if provider.ChatPath != "" {
-		targetURL += provider.ChatPath
-	} else {
-		targetURL += "/chat/completions"
+	forwardReq, err := ps.buildForwardRequest(req, provider, account)
+	if err != nil {
+		ps.writeError(w, http.StatusInternalServerError, "Failed to build request: "+err.Error())
+		return
 	}
 
-	headers := ps.buildHeaders(provider, account, r)
-
-	forwardReq := &ForwardRequest{
-		Method:     http.MethodPost,
-		URL:        targetURL,
-		Headers:    headers,
-		Body:       body,
-		Timeout:    120 * time.Second,
-		IsStream:   req.Stream,
-		ProviderID: provider.ID,
-		AccountID:  account.ID,
-		Model:      req.Model,
+	// 发送请求
+	resp, err := ps.forwardRequest(forwardReq, provider)
+	if err != nil {
+		ps.recordRequestFailure(time.Since(startTime).Milliseconds())
+		ps.markAccountFailed(account.ID)
+		ps.writeError(w, http.StatusBadGateway, "Forward request failed: "+err.Error())
+		return
 	}
+	defer resp.Body.Close()
 
-	ps.mu.Lock()
-	ps.stats.TotalRequests++
-	ps.stats.ActiveConnections++
-	ps.mu.Unlock()
+	// 处理响应
+	latency := time.Since(startTime).Milliseconds()
 
-	// 执行转发
 	if req.Stream {
-		ps.forwardStream(forwardReq, w)
+		ps.handleStreamResponse(w, resp, req.Model, requestID, account.ID, provider.ID, latency)
 	} else {
-		ps.forward(forwardReq, w)
+		ps.handleNonStreamResponse(w, resp, req.Model, account.ID, provider.ID, latency)
 	}
-
-	ps.mu.Lock()
-	ps.stats.ActiveConnections--
-	ps.mu.Unlock()
 }
 
-// handleModels 获取所有模型
+// handleCompletions 处理补全请求（兼容旧API）
+func (ps *ProxyServer) handleCompletions(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	requestID := fmt.Sprintf("cmpl-%d-%s", time.Now().Unix(), randomString(8))
+
+	if r.Method != http.MethodPost {
+		ps.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		Model       string   `json:"model"`
+		Prompt      string   `json:"prompt"`
+		MaxTokens   *int     `json:"max_tokens,omitempty"`
+		Temperature *float64 `json:"temperature,omitempty"`
+		Stream      bool     `json:"stream,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		ps.writeError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Model == "" || req.Prompt == "" {
+		ps.writeError(w, http.StatusBadRequest, "Missing required fields")
+		return
+	}
+
+	// 将 prompt 转换为 messages 格式
+	messages := []types.ChatMessage{
+		{Role: "user", Content: req.Prompt},
+	}
+
+	chatReq := types.ChatCompletionRequest{
+		Model:       req.Model,
+		Messages:    messages,
+		MaxTokens:   req.MaxTokens,
+		Temperature: req.Temperature,
+		Stream:     req.Stream,
+	}
+
+	// 复用聊天补全逻辑
+	config := ps.store.GetConfig()
+
+	if config.ProxyConfig.EnableApiKey {
+		if !ps.validateAPIKey(r) {
+			ps.writeError(w, http.StatusUnauthorized, "Invalid API key")
+			return
+		}
+	}
+
+	selection := ps.selectAccount(req.Model, config.ProxyConfig.LoadBalanceConfig.Strategy)
+	if selection == nil {
+		ps.writeError(w, http.StatusServiceUnavailable, "No available account")
+		return
+	}
+
+	forwardReq, err := ps.buildForwardRequest(chatReq, selection.Provider, selection.Account)
+	if err != nil {
+		ps.writeError(w, http.StatusInternalServerError, "Failed to build request")
+		return
+	}
+
+	resp, err := ps.forwardRequest(forwardReq, selection.Provider)
+	if err != nil {
+		ps.writeError(w, http.StatusBadGateway, "Forward request failed")
+		return
+	}
+	defer resp.Body.Close()
+
+	latency := time.Since(startTime).Milliseconds()
+
+	if req.Stream {
+		ps.handleStreamResponse(w, resp, req.Model, requestID, selection.Account.ID, selection.Provider.ID, latency)
+	} else {
+		ps.handleNonStreamResponse(w, resp, req.Model, selection.Account.ID, selection.Provider.ID, latency)
+	}
+}
+
+// handleModels 处理模型列表请求
 func (ps *ProxyServer) handleModels(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if !ps.validateApiKey(r) {
-		http.Error(w, "Invalid API key", http.StatusUnauthorized)
-		return
-	}
-
-	providers := ps.storeManager.GetProviders()
-	models := make([]map[string]interface{}, 0)
-
-	for _, p := range providers {
-		if !p.Enabled {
-			continue
-		}
-		for _, modelName := range p.SupportedModels {
-			models = append(models, map[string]interface{}{
-				"id":       modelName,
-				"object":   "model",
-				"created":  time.Now().Unix(),
-				"owned_by": p.Name,
-			})
-		}
-	}
+	models := ps.getAvailableModels()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -333,280 +386,747 @@ func (ps *ProxyServer) handleModels(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleGetModel 获取单个模型
+// handleGetModel 处理单个模型请求
 func (ps *ProxyServer) handleGetModel(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	modelID := strings.TrimPrefix(r.URL.Path, "/v1/models/")
 
-	if !ps.validateApiKey(r) {
-		http.Error(w, "Invalid API key", http.StatusUnauthorized)
-		return
-	}
-
-	modelName := r.URL.Path[len("/v1/models/"):]
-
-	providers := ps.storeManager.GetProviders()
-	for _, p := range providers {
-		if !p.Enabled {
-			continue
-		}
-		for _, m := range p.SupportedModels {
-			if m == modelName {
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"id":       modelName,
-					"object":   "model",
-					"created":  time.Now().Unix(),
-					"owned_by": p.Name,
-				})
-				return
-			}
+	models := ps.getAvailableModels()
+	for _, model := range models {
+		if model["id"] == modelID {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"object": "model",
+				"id":     model["id"],
+				"name":   model["name"],
+			})
+			return
 		}
 	}
 
-	http.Error(w, "Model not found", http.StatusNotFound)
+	ps.writeError(w, http.StatusNotFound, "Model not found")
+}
+
+// handleManagement 处理管理API请求
+func (ps *ProxyServer) handleManagement(w http.ResponseWriter, r *http.Request) {
+	config := ps.store.GetConfig()
+
+	if config.ManagementConfig.AuthToken != "" {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "Bearer "+config.ManagementConfig.AuthToken {
+			ps.writeError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/v0/management")
+	parts := strings.SplitN(strings.Trim(path, "/"), "/", 2)
+
+	if len(parts) == 0 {
+		ps.writeError(w, http.StatusBadRequest, "Invalid path")
+		return
+	}
+
+	switch parts[0] {
+	case "providers":
+		ps.handleManagementProviders(w, r, parts)
+	case "accounts":
+		ps.handleManagementAccounts(w, r, parts)
+	case "config":
+		ps.handleManagementConfig(w, r)
+	case "statistics":
+		ps.handleManagementStatistics(w, r)
+	case "sessions":
+		ps.handleManagementSessions(w, r, parts)
+	default:
+		ps.writeError(w, http.StatusNotFound, "Not found")
+	}
 }
 
 // ==================== 辅助方法 ====================
 
-// validateApiKey 验证 API Key
-func (ps *ProxyServer) validateApiKey(r *http.Request) bool {
-	config := ps.storeManager.GetConfig()
+func (ps *ProxyServer) validateAPIKey(r *http.Request) bool {
+	config := ps.store.GetConfig()
 
-	// 如果未启用 API Key 检查，允许通过
-	if !config.EnableApiKey || len(config.ApiKeys) == 0 {
-		return true
+	authHeader := r.Header.Get("Authorization")
+	var providedKey string
+
+	if authHeader != "" {
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			providedKey = strings.TrimPrefix(authHeader, "Bearer ")
+		}
+	} else {
+		providedKey = r.URL.Query().Get("api_key")
+		if providedKey == "" {
+			providedKey = r.Header.Get("X-API-Key")
+		}
 	}
 
-	// 获取提供的 key
-	providedKey := r.Header.Get("Authorization")
-	if len(providedKey) > 7 && providedKey[:7] == "Bearer " {
-		providedKey = providedKey[7:]
-	} else if queryKey := r.URL.Query().Get("api_key"); queryKey != "" {
-		providedKey = queryKey
-	} else if headerKey := r.Header.Get("X-API-Key"); headerKey != "" {
-		providedKey = headerKey
-	} else {
+	if providedKey == "" {
 		return false
 	}
 
-	// 检查 key 是否存在且启用
-	for _, k := range config.ApiKeys {
-		if k.Key == providedKey && k.Enabled {
+	for _, key := range config.ProxyConfig.ApiKeys {
+		if key.Key == providedKey && key.Enabled {
 			return true
 		}
 	}
+
 	return false
 }
 
-// selectProviderAndAccount 选择提供商和账户
-func (ps *ProxyServer) selectProviderAndAccount(model string) (*types.Provider, *types.Account, error) {
-	providers := ps.storeManager.GetProviders()
-	accounts := ps.storeManager.GetAccounts(false)
+func (ps *ProxyServer) getClientIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
+		return strings.Split(ip, ",")[0]
+	}
+	return r.RemoteAddr
+}
 
-	// 简单策略：查找第一个启用的提供商及其第一个启用的账户
-	for _, p := range providers {
-		if !p.Enabled {
+type accountSelection struct {
+	Account     *types.Account
+	Provider    *types.Provider
+	ActualModel string
+}
+
+func (ps *ProxyServer) selectAccount(model string, strategy types.LoadBalanceStrategy) *accountSelection {
+	providers := ps.store.GetAllProviders()
+	var candidates []*accountSelection
+
+	for _, provider := range providers {
+		if !provider.Enabled {
 			continue
 		}
-		for _, a := range accounts {
-			if a.ProviderID == p.ID && a.Status == types.AccountStatusActive {
-				return &p, &a, nil
+
+		accounts := ps.store.GetAccountsByProviderID(provider.ID, true)
+		for i := range accounts {
+			account := &accounts[i]
+			if !ps.isAccountAvailable(account.ID) {
+				continue
+			}
+
+			actualModel := ps.mapModel(model, provider)
+			candidates = append(candidates, &accountSelection{
+				Account:     account,
+				Provider:    &provider,
+				ActualModel: actualModel,
+			})
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// 根据策略选择
+	switch strategy {
+	case types.LoadBalanceFillFirst:
+		return ps.selectFillFirst(candidates)
+	case types.LoadBalanceFailover:
+		return ps.selectFailover(candidates)
+	default: // round-robin
+		return ps.selectRoundRobin(candidates)
+	}
+}
+
+func (ps *ProxyServer) isAccountAvailable(accountID string) bool {
+	account, err := ps.store.GetAccountByID(accountID)
+	if err != nil {
+		return false
+	}
+
+	if account.Status != types.AccountStatusActive {
+		return false
+	}
+
+	info, exists := ps.failedAccounts[accountID]
+	if exists {
+		if time.Now().Unix()-info.LastFailTime < 60 { // 1分钟恢复时间
+			if info.Count >= 3 {
+				return false
 			}
 		}
 	}
 
-	return nil, nil, errors.New("no available provider for model")
+	return true
 }
 
-// buildHeaders 构建请求头
-func (ps *ProxyServer) buildHeaders(provider *types.Provider, account *types.Account, r *http.Request) map[string]string {
-	headers := make(map[string]string)
-
-	// 复制原始请求头
-	for k, v := range r.Header {
-		if len(v) > 0 {
-			headers[k] = v[0]
-		}
+func (ps *ProxyServer) selectRoundRobin(candidates []*accountSelection) *accountSelection {
+	if len(candidates) == 0 {
+		return nil
 	}
 
-	// 提供商特定头
-	for k, v := range provider.Headers {
-		headers[k] = v
-	}
+	key := candidates[0].Provider.ID
+	index := ps.roundRobinIndex[key]
+	selection := candidates[index%len(candidates)]
 
-	// 添加凭证
-	if account.Credentials != nil {
-		if token, ok := account.Credentials["token"]; ok && token != "" {
-			headers["Authorization"] = "Bearer " + token
-		}
-		if cookie, ok := account.Credentials["cookie"]; ok && cookie != "" {
-			headers["Cookie"] = cookie
-		}
-		if apiKey, ok := account.Credentials["api_key"]; ok && apiKey != "" {
-			headers["api-key"] = apiKey
-		}
-		if authorization, ok := account.Credentials["Authorization"]; ok && authorization != "" {
-			headers["Authorization"] = authorization
-		}
-	}
-
-	return headers
+	ps.roundRobinIndex[key] = index + 1
+	return selection
 }
 
-// forward 非流式转发
-func (ps *ProxyServer) forward(req *ForwardRequest, w http.ResponseWriter) {
-	start := time.Now()
-
-	ctx, cancel := context.WithTimeout(context.Background(), req.Timeout)
-	defer cancel()
-
-	httpReq, err := http.NewRequestWithContext(ctx, req.Method, req.URL, bytes.NewReader(req.Body))
-	if err != nil {
-		ps.logger.Error("Failed to create request", logger.Field{Key: "error", Value: err.Error()})
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		ps.mu.Lock()
-		ps.stats.FailedRequests++
-		ps.mu.Unlock()
-		return
+func (ps *ProxyServer) selectFillFirst(candidates []*accountSelection) *accountSelection {
+	if len(candidates) == 0 {
+		return nil
 	}
 
-	for k, v := range req.Headers {
-		httpReq.Header.Set(k, v)
-	}
+	// 选择使用最少的账户
+	var selected *accountSelection
+	minRequests := int64(0x7fffffffffffffff)
 
-	client := &http.Client{
-		Timeout: req.Timeout,
-	}
-
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		ps.logger.Error("Request failed", logger.Field{Key: "error", Value: err.Error()})
-		http.Error(w, "Gateway error", http.StatusBadGateway)
-		ps.mu.Lock()
-		ps.stats.FailedRequests++
-		ps.mu.Unlock()
-		return
-	}
-	defer resp.Body.Close()
-
-	// 复制响应头
-	for k, v := range resp.Header {
-		if len(v) > 0 {
-			w.Header().Set(k, v[0])
+	for _, c := range candidates {
+		if c.Account.RequestCount < minRequests {
+			minRequests = c.Account.RequestCount
+			selected = c
 		}
 	}
-	w.WriteHeader(resp.StatusCode)
 
-	// 复制响应体
-	io.Copy(w, resp.Body)
+	return selected
+}
 
-	latency := time.Since(start).Milliseconds()
+func (ps *ProxyServer) selectFailover(candidates []*accountSelection) *accountSelection {
+	if len(candidates) == 0 {
+		return nil
+	}
 
+	// 按请求数排序，选择使用最多的（假设最可靠的）
+	var selected *accountSelection
+	maxRequests := int64(0)
+
+	for _, c := range candidates {
+		if c.Account.RequestCount > maxRequests {
+			maxRequests = c.Account.RequestCount
+			selected = c
+		}
+	}
+
+	return selected
+}
+
+func (ps *ProxyServer) mapModel(model string, provider types.Provider) string {
+	// 简单的模型映射逻辑
+	switch provider.ID {
+	case "deepseek":
+		if strings.HasPrefix(model, "gpt-") {
+			return "deepseek-chat"
+		}
+	case "glm":
+		if strings.HasPrefix(model, "gpt-") {
+			return "glm-4"
+		}
+	case "kimi":
+		if strings.HasPrefix(model, "gpt-") {
+			return "moonshot-v1-8k"
+		}
+	case "qwen":
+		if strings.HasPrefix(model, "gpt-") {
+			return "qwen-turbo"
+		}
+	}
+	return model
+}
+
+func (ps *ProxyServer) recordRequestStart(model, providerID, accountID string) {
 	ps.mu.Lock()
-	ps.stats.SuccessRequests++
-	ps.stats.TotalLatency += latency
-	if req.Model != "" {
-		ps.stats.ModelUsage[req.Model]++
-	}
-	if req.ProviderID != "" {
-		ps.stats.ProviderUsage[req.ProviderID]++
-	}
-	ps.mu.Unlock()
+	defer ps.mu.Unlock()
 
-	ps.storeManager.RecordRequest(true, latency, req.Model, req.ProviderID, req.AccountID)
+	ps.stats.TotalRequests++
 }
 
-// forwardStream 流式转发
-func (ps *ProxyServer) forwardStream(req *ForwardRequest, w http.ResponseWriter) {
-	start := time.Now()
+func (ps *ProxyServer) recordRequestFailure(latency int64) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), req.Timeout)
-	defer cancel()
+	ps.stats.FailedRequests++
+	ps.stats.TotalLatency += latency
+}
 
-	httpReq, err := http.NewRequestWithContext(ctx, req.Method, req.URL, bytes.NewReader(req.Body))
-	if err != nil {
-		ps.logger.Error("Failed to create stream request", logger.Field{Key: "error", Value: err.Error()})
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		ps.mu.Lock()
-		ps.stats.FailedRequests++
-		ps.mu.Unlock()
-		return
+func (ps *ProxyServer) markAccountFailed(accountID string) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	info, exists := ps.failedAccounts[accountID]
+	if !exists {
+		info = &failedAccountInfo{}
+		ps.failedAccounts[accountID] = info
 	}
 
-	for k, v := range req.Headers {
+	info.Count++
+	info.LastFailTime = time.Now().Unix()
+}
+
+func (ps *ProxyServer) buildForwardRequest(req types.ChatCompletionRequest, provider *types.Provider, account *types.Account) (*http.Request, error) {
+	// 获取解密的凭证
+	creds, err := ps.store.GetDecryptedCredentials(account.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get credentials: %w", err)
+	}
+
+	// 构建请求URL
+	chatPath := provider.ChatPath
+	if chatPath == "" {
+		chatPath = "/chat/completions"
+	}
+	url := provider.APIEndpoint + chatPath
+
+	// 转换请求格式（根据提供商）
+	body := ps.convertRequestForProvider(req, provider, creds)
+
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// 设置头部
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+
+	for k, v := range provider.Headers {
 		httpReq.Header.Set(k, v)
 	}
 
-	client := &http.Client{
-		Timeout: req.Timeout,
+	// 根据认证类型设置授权头
+	switch provider.AuthType {
+	case types.AuthTypeToken, types.AuthTypeUserToken:
+		if token, ok := creds["token"]; ok {
+			httpReq.Header.Set("Authorization", "Bearer "+token)
+		}
+	case types.AuthTypeRefreshToken:
+		if refreshToken, ok := creds["refresh_token"]; ok {
+			httpReq.Header.Set("Authorization", "Bearer "+refreshToken)
+		}
 	}
 
-	resp, err := client.Do(httpReq)
+	return httpReq, nil
+}
+
+func (ps *ProxyServer) convertRequestForProvider(req types.ChatCompletionRequest, provider *types.Provider, creds map[string]string) interface{} {
+	// 转换为各提供商特定的格式
+	switch provider.ID {
+	case "deepseek":
+		return ps.convertForDeepSeek(req, creds)
+	case "glm":
+		return ps.convertForGLM(req, creds)
+	case "kimi":
+		return ps.convertForKimi(req, creds)
+	case "qwen":
+		return ps.convertForQwen(req, creds)
+	default:
+		return req
+	}
+}
+
+func (ps *ProxyServer) convertForDeepSeek(req types.ChatCompletionRequest, creds map[string]string) map[string]interface{} {
+	// DeepSeek 特定转换
+	body := map[string]interface{}{
+		"model":    req.Model,
+		"messages": req.Messages,
+		"stream":   req.Stream,
+	}
+
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
+	}
+	if req.MaxTokens != nil {
+		body["max_tokens"] = *req.MaxTokens
+	}
+	if req.WebSearch {
+		body["web_search"] = true
+	}
+	if req.ReasoningEffort != "" {
+		body["reasoning_effort"] = req.ReasoningEffort
+	}
+	if len(req.Tools) > 0 {
+		body["tools"] = req.Tools
+	}
+
+	return body
+}
+
+func (ps *ProxyServer) convertForGLM(req types.ChatCompletionRequest, creds map[string]string) map[string]interface{} {
+	// GLM 特定转换
+	body := map[string]interface{}{
+		"model":    req.Model,
+		"messages": req.Messages,
+		"stream":   req.Stream,
+	}
+
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
+	}
+	if req.MaxTokens != nil {
+		body["max_tokens"] = *req.MaxTokens
+	}
+	if req.DeepResearch {
+		body["deep_research"] = true
+	}
+	if len(req.Tools) > 0 {
+		body["tools"] = req.Tools
+	}
+
+	return body
+}
+
+func (ps *ProxyServer) convertForKimi(req types.ChatCompletionRequest, creds map[string]string) map[string]interface{} {
+	// Kimi 特定转换
+	body := map[string]interface{}{
+		"model":    req.Model,
+		"messages": req.Messages,
+		"stream":   req.Stream,
+	}
+
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
+	}
+	if req.MaxTokens != nil {
+		body["max_tokens"] = *req.MaxTokens
+	}
+
+	return body
+}
+
+func (ps *ProxyServer) convertForQwen(req types.ChatCompletionRequest, creds map[string]string) map[string]interface{} {
+	// Qwen 特定转换
+	body := map[string]interface{}{
+		"model":    req.Model,
+		"messages": req.Messages,
+		"stream":   req.Stream,
+	}
+
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
+	}
+	if req.MaxTokens != nil {
+		body["max_tokens"] = *req.MaxTokens
+	}
+
+	return body
+}
+
+func (ps *ProxyServer) forwardRequest(req *http.Request, provider *types.Provider) (*http.Response, error) {
+	client := &http.Client{
+		Timeout: 120 * time.Second,
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
-		ps.logger.Error("Stream request failed", logger.Field{Key: "error", Value: err.Error()})
-		http.Error(w, "Gateway error", http.StatusBadGateway)
-		ps.mu.Lock()
-		ps.stats.FailedRequests++
-		ps.mu.Unlock()
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+
+	return resp, nil
+}
+
+func (ps *ProxyServer) handleStreamResponse(w http.ResponseWriter, resp *http.Response, model, requestID, accountID, providerID string, latency int64) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Transfer-Encoding", "chunked")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		ps.writeError(w, http.StatusInternalServerError, "Streaming not supported")
 		return
 	}
-	defer resp.Body.Close()
 
-	// 复制响应头
-	for k, v := range resp.Header {
-		if len(v) > 0 {
-			w.Header().Set(k, v[0])
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
+	reader := bufio.NewReader(resp.Body)
+	created := time.Now().Unix()
 
-	// 流式传输
-	buf := make([]byte, 4096)
 	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
-				ps.logger.Error("Stream write error", logger.Field{Key: "error", Value: writeErr.Error()})
-				break
-			}
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
-		}
+		line, err := reader.ReadString('\n')
 		if err != nil {
-			if err == io.EOF {
-				break
+			if err != io.EOF {
+				ps.logger.Error("Stream read error", logger.Field{Key: "error", Value: err.Error()})
 			}
-			ps.logger.Error("Stream read error", logger.Field{Key: "error", Value: err.Error()})
 			break
 		}
+
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// 解析 SSE 格式
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimPrefix(line, "data: ")
+
+			if data == "[DONE]" {
+				fmt.Fprintf(w, "data: [DONE]\n\n")
+				flusher.Flush()
+				break
+			}
+
+			// 转换响应格式
+			transformed := ps.transformStreamData(data, model, requestID, created)
+			fmt.Fprintf(w, "data: %s\n\n", transformed)
+			flusher.Flush()
+		}
 	}
 
-	latency := time.Since(start).Milliseconds()
-
-	ps.mu.Lock()
-	ps.stats.SuccessRequests++
-	ps.stats.TotalLatency += latency
-	if req.Model != "" {
-		ps.stats.ModelUsage[req.Model]++
-	}
-	if req.ProviderID != "" {
-		ps.stats.ProviderUsage[req.ProviderID]++
-	}
-	ps.mu.Unlock()
-
-	ps.storeManager.RecordRequest(true, latency, req.Model, req.ProviderID, req.AccountID)
+	// 记录统计
+	ps.store.RecordRequest(true, latency, model, providerID, accountID)
+	ps.store.MarkAccountUsed(accountID)
 }
 
-// Handler 返回 HTTP 处理器供内部使用
-func (ps *ProxyServer) Handler() http.Handler {
-	return ps.router
+func (ps *ProxyServer) transformStreamData(data, model, requestID string, created int64) string {
+	// 尝试解析并转换
+	var chunk map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return data
+	}
+
+	// 确保响应格式符合 OpenAI 标准
+	if id, ok := chunk["id"].(string); !ok || id == "" {
+		chunk["id"] = requestID
+	}
+	if _, ok := chunk["object"].(string); !ok {
+		chunk["object"] = "chat.completion.chunk"
+	}
+	chunk["created"] = created
+	if _, ok := chunk["model"].(string); !ok {
+		chunk["model"] = model
+	}
+
+	result, _ := json.Marshal(chunk)
+	return string(result)
+}
+
+func (ps *ProxyServer) handleNonStreamResponse(w http.ResponseWriter, resp *http.Response, model, accountID, providerID string, latency int64) {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		ps.writeError(w, http.StatusBadGateway, "Failed to read response")
+		return
+	}
+
+	// 转换响应格式
+	transformed := ps.transformResponse(body, model)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	w.Write(transformed)
+
+	// 记录统计
+	success := resp.StatusCode >= 200 && resp.StatusCode < 300
+	ps.store.RecordRequest(success, latency, model, providerID, accountID)
+
+	if success {
+		ps.store.MarkAccountUsed(accountID)
+	} else {
+		ps.markAccountFailed(accountID)
+	}
+}
+
+func (ps *ProxyServer) transformResponse(body []byte, model string) []byte {
+	var resp map[string]interface{}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return body
+	}
+
+	// 确保响应格式符合 OpenAI 标准
+	if id, ok := resp["id"].(string); !ok || id == "" {
+		resp["id"] = fmt.Sprintf("chatcmpl-%d", time.Now().Unix())
+	}
+	if _, ok := resp["object"].(string); !ok {
+		resp["object"] = "chat.completion"
+	}
+	resp["created"] = time.Now().Unix()
+	if _, ok := resp["model"].(string); !ok {
+		resp["model"] = model
+	}
+
+	result, _ := json.Marshal(resp)
+	return result
+}
+
+func (ps *ProxyServer) getAvailableModels() []map[string]string {
+	models := []map[string]string{
+		{"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo"},
+		{"id": "gpt-4", "name": "GPT-4"},
+		{"id": "gpt-4-turbo", "name": "GPT-4 Turbo"},
+		{"id": "deepseek-chat", "name": "DeepSeek Chat"},
+		{"id": "deepseek-coder", "name": "DeepSeek Coder"},
+		{"id": "glm-4", "name": "GLM-4"},
+		{"id": "glm-4-flash", "name": "GLM-4 Flash"},
+		{"id": "moonshot-v1-8k", "name": "Moonshot V1 8K"},
+		{"id": "moonshot-v1-32k", "name": "Moonshot V1 32K"},
+		{"id": "qwen-turbo", "name": "Qwen Turbo"},
+		{"id": "qwen-plus", "name": "Qwen Plus"},
+		{"id": "qwen-max", "name": "Qwen Max"},
+		{"id": "minimax-chat", "name": "MiniMax Chat"},
+		{"id": "mimo-chat", "name": "Mimo Chat"},
+		{"id": "perplexity", "name": "Perplexity"},
+	}
+
+	return models
+}
+
+func (ps *ProxyServer) writeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": message,
+			"type":    "invalid_request_error",
+			"code":    status,
+		},
+	})
+}
+
+// ==================== Management API 处理器 ====================
+
+func (ps *ProxyServer) handleManagementProviders(w http.ResponseWriter, r *http.Request, parts []string) {
+	switch r.Method {
+	case http.MethodGet:
+		if len(parts) > 1 && parts[1] != "" {
+			ps.handleGetProvider(w, r, parts[1])
+		} else {
+			ps.handleListProviders(w, r)
+		}
+	case http.MethodPost:
+		ps.handleCreateProvider(w, r)
+	default:
+		ps.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+func (ps *ProxyServer) handleListProviders(w http.ResponseWriter, r *http.Request) {
+	providers := ps.store.GetAllProviders()
+	ps.writeJSON(w, map[string]interface{}{"success": true, "data": providers})
+}
+
+func (ps *ProxyServer) handleGetProvider(w http.ResponseWriter, r *http.Request, id string) {
+	provider, err := ps.store.GetProviderByID(id)
+	if err != nil {
+		ps.writeError(w, http.StatusNotFound, "Provider not found")
+		return
+	}
+	ps.writeJSON(w, map[string]interface{}{"success": true, "data": provider})
+}
+
+func (ps *ProxyServer) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
+	var req types.Provider
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		ps.writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := ps.store.CreateProvider(req); err != nil {
+		ps.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	ps.writeJSON(w, map[string]interface{}{"success": true})
+}
+
+func (ps *ProxyServer) handleManagementAccounts(w http.ResponseWriter, r *http.Request, parts []string) {
+	switch r.Method {
+	case http.MethodGet:
+		if len(parts) > 1 && parts[1] != "" {
+			ps.handleGetAccount(w, r, parts[1])
+		} else {
+			ps.handleListAccounts(w, r)
+		}
+	case http.MethodPost:
+		ps.handleCreateAccount(w, r)
+	default:
+		ps.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+func (ps *ProxyServer) handleListAccounts(w http.ResponseWriter, r *http.Request) {
+	accounts := ps.store.GetAllAccounts()
+	ps.writeJSON(w, map[string]interface{}{"success": true, "data": accounts})
+}
+
+func (ps *ProxyServer) handleGetAccount(w http.ResponseWriter, r *http.Request, id string) {
+	account, err := ps.store.GetAccountByID(id)
+	if err != nil {
+		ps.writeError(w, http.StatusNotFound, "Account not found")
+		return
+	}
+	ps.writeJSON(w, map[string]interface{}{"success": true, "data": account})
+}
+
+func (ps *ProxyServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ProviderID  string            `json:"providerId"`
+		Name        string            `json:"name"`
+		Credentials map[string]string `json:"credentials"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		ps.writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	account, err := ps.store.CreateAccount(req.ProviderID, req.Name, req.Credentials)
+	if err != nil {
+		ps.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	ps.writeJSON(w, map[string]interface{}{"success": true, "data": account})
+}
+
+func (ps *ProxyServer) handleManagementConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		config := ps.store.GetConfig()
+		ps.writeJSON(w, map[string]interface{}{"success": true, "data": config})
+	} else if r.Method == http.MethodPut {
+		var config types.AppConfig
+		if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+			ps.writeError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+		if err := ps.store.UpdateConfig(config); err != nil {
+			ps.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		ps.writeJSON(w, map[string]interface{}{"success": true})
+	} else {
+		ps.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+func (ps *ProxyServer) handleManagementStatistics(w http.ResponseWriter, r *http.Request) {
+	stats := ps.store.GetStatistics()
+	ps.writeJSON(w, map[string]interface{}{"success": true, "data": stats})
+}
+
+func (ps *ProxyServer) handleManagementSessions(w http.ResponseWriter, r *http.Request, parts []string) {
+	ps.writeError(w, http.StatusNotImplemented, "Sessions API not implemented")
+}
+
+func (ps *ProxyServer) writeJSON(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(data)
+}
+
+// ==================== 工具函数 ====================
+
+func randomString(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	result := make([]byte, length)
+	for i := range result {
+		result[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(result)
 }
 
 // Port 返回当前端口
 func (ps *ProxyServer) Port() int {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
 	return ps.status.Port
+}
+
+// IsRunning 返回是否运行中
+func (ps *ProxyServer) IsRunning() bool {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.status.IsRunning
 }
