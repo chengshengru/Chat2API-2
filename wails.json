@@ -1,9 +1,9 @@
 {
   "name": "Chat2API",
   "outputfilename": "Chat2API",
-  "frontend:install": "npm install",
-  "frontend:build": "npm run build",
-  "frontend:dev:watcher": "npm run dev",
+  "frontend:install": "cd frontend && npm install",
+  "frontend:build": "cd frontend && npm run build",
+  "frontend:dev:watcher": "cd frontend && npm run dev",
   "frontend:dev:serverPort": "5173",
   "frontend:dev:proxyURL": "http://localhost:5173",
   "author": {
